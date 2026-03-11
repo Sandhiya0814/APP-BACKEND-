@@ -15,6 +15,31 @@ class CustomUser(AbstractUser):
     class Meta:
         db_table = 'users'
 
+class Doctor(models.Model):
+    user = models.OneToOneField(CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='doctor_profile')
+    name = models.CharField(max_length=255)
+    email = models.EmailField(unique=True)
+    specialization = models.CharField(max_length=255)
+    license_number = models.CharField(max_length=100, unique=True)
+    phone = models.CharField(max_length=20)
+    status = models.CharField(max_length=20, default='pending')
+    is_active = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = 'doctor'
+
+class Staff(models.Model):
+    user = models.OneToOneField(CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='staff_profile')
+    name = models.CharField(max_length=255)
+    email = models.EmailField(unique=True)
+    department = models.CharField(max_length=255)
+    license_id = models.CharField(max_length=100, unique=True)
+    phone = models.CharField(max_length=20)
+    status = models.CharField(max_length=20, default='active')
+
+    class Meta:
+        db_table = 'staff'
+
 class Patient(models.Model):
     STATUS_CHOICES = [
         ('critical', 'Critical'),
@@ -138,3 +163,23 @@ class Notification(models.Model):
     message = models.TextField()
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class PasswordResetToken(models.Model):
+    """
+    Stores password reset tokens for both doctor and staff users.
+    Role is 'doctor' or 'staff' to know which table to update on reset.
+    """
+    ROLE_CHOICES = [('doctor', 'Doctor'), ('staff', 'Staff')]
+    email      = models.EmailField()
+    role       = models.CharField(max_length=10, choices=ROLE_CHOICES)
+    token      = models.CharField(max_length=128, unique=True)
+    is_used    = models.BooleanField(default=False)
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'password_reset_token'
+
+    def __str__(self):
+        return f"{self.role} | {self.email} | used={self.is_used}"

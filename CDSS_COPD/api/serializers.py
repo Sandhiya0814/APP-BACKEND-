@@ -4,27 +4,95 @@ from .models import *
 class CustomUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone_number', 'department', 'is_approved')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'phone_number', 'department', 'is_approved', 'is_active')
 
-class SignupSerializer(serializers.ModelSerializer):
+class SignupSerializer(serializers.Serializer):
+    name = serializers.CharField(required=False)
+    full_name = serializers.CharField(required=False)
+    email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
-    class Meta:
-        model = CustomUser
-        fields = ('username', 'email', 'password', 'first_name', 'last_name', 'role', 'phone_number', 'department')
+    role = serializers.CharField()
+
+    def validate_email(self, value):
+        user_exists = CustomUser.objects.filter(email=value).first()
+        if user_exists:
+            if not user_exists.is_approved:
+                raise serializers.ValidationError("Your account is waiting for admin approval")
+            
+            # If user exists and is approved:
+            role = self.initial_data.get('role', 'staff').lower()
+            if 'staff' in role or 'clinical' in role:
+                raise serializers.ValidationError("Email already registered. Please login or use another email.")
+            else:
+                raise serializers.ValidationError("Email already registered.")
+                
+        return value
 
     def create(self, validated_data):
+        # Resolve name
+        name = validated_data.get('name') or validated_data.get('full_name', '')
+        email = validated_data['email']
+        password = validated_data['password']
+
+        # Normalize role
+        raw_role = validated_data.get('role', 'staff').lower()
+        if 'staff' in raw_role or 'clinical' in raw_role:
+            role = 'staff'
+        elif 'doctor' in raw_role or 'physician' in raw_role:
+            role = 'doctor'
+        else:
+            role = 'staff'
+
+        # Split full name
+        parts = name.split(' ', 1)
+        first_name = parts[0]
+        last_name = parts[1] if len(parts) > 1 else ''
+
+        # 1. Create auth user in users table
         user = CustomUser.objects.create_user(
-            username=validated_data['username'],
-            email=validated_data.get('email', ''),
-            password=validated_data['password'],
-            first_name=validated_data.get('first_name', ''),
-            last_name=validated_data.get('last_name', ''),
-            role=validated_data.get('role', 'staff'),
-            phone_number=validated_data.get('phone_number', ''),
-            department=validated_data.get('department', ''),
-            is_approved=False
+            username=email,
+            email=email,
+            password=password,
+            first_name=first_name,
+            last_name=last_name,
+            role=role,
+            is_approved=False,
+            is_active=False
         )
+
+        # 2. Also insert into doctor or staff table
+        if role == 'doctor':
+            Doctor.objects.create(
+                user=user,
+                name=name,
+                email=email,
+                specialization='General',
+                license_number=f'PENDING-{user.id}',
+                phone='',
+                status='pending'
+            )
+        elif role == 'staff':
+            Staff.objects.create(
+                user=user,
+                name=name,
+                email=email,
+                department='General',
+                license_id=f'PENDING-{user.id}',
+                phone='',
+                status='pending'
+            )
+
         return user
+
+class DoctorSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Doctor
+        fields = ('id', 'name', 'email', 'specialization', 'license_number', 'phone', 'status')
+
+class StaffSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Staff
+        fields = ('id', 'name', 'email', 'department', 'license_id', 'phone', 'status')
 
 class PatientSerializer(serializers.ModelSerializer):
     class Meta:
