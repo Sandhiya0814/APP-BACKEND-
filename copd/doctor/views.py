@@ -3,6 +3,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.contrib.auth.hashers import check_password, make_password
+from django.core.mail import send_mail
+from django.conf import settings
 
 from .models import Doctor, DoctorOTP
 from .serializers import (
@@ -10,64 +12,87 @@ from .serializers import (
     ForgotPasswordSerializer, VerifyOTPSerializer, ResetPasswordSerializer
 )
 
-
 class DoctorLoginAPIView(APIView):
-    """
-    POST /api/doctor/login/
-    Body: { "email": "...", "password": "..." }
-    """
-    def post(self, request):
-        serializer = DoctorLoginSerializer(data=request.data)
-        if serializer.is_valid():
-            email = serializer.validated_data['email']
-            password = serializer.validated_data['password']
-            try:
-                doctor = Doctor.objects.get(email=email)
-                if not doctor.is_active:
-                    return Response({"error": "Your account has been deactivated."}, status=status.HTTP_403_FORBIDDEN)
-                if doctor.check_password(password):
-                    return Response({
-                        "message": "Login successful",
-                        "role": "doctor",
-                        "doctor_id": doctor.id,
-                        "name": doctor.name,
-                        "email": doctor.email,
-                        "specialization": doctor.specialization,
-                        "is_approved": doctor.is_approved,
-                    }, status=status.HTTP_200_OK)
-                else:
-                    return Response({"error": "Invalid password."}, status=status.HTTP_401_UNAUTHORIZED)
-            except Doctor.DoesNotExist:
-                return Response({"error": "No account found with this email."}, status=status.HTTP_404_NOT_FOUND)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    def post(self, request):
+        email = request.data.get("email")
+        password = request.data.get("password")
+
+        if not email or not password:
+            return Response({"error": "Email and password are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # SELECT * FROM sandhiya.doctor WHERE email = <email>
+        try:
+            doctor = Doctor.objects.get(email=email)
+        except Doctor.DoesNotExist:
+            return Response({"error": "Invalid email or password"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        # Validate hashed password
+        if not doctor.check_password(password):
+            return Response({"error": "Invalid email or password"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        # Check approval status
+        if not doctor.is_approved:
+            return Response({"error": "Waiting for admin approval"}, status=status.HTTP_403_FORBIDDEN)
+
+        # Check active status
+        if not doctor.is_active:
+            return Response({"error": "Your account is disabled by admin"}, status=status.HTTP_403_FORBIDDEN)
+
+        # Generate 6-digit OTP and store in DoctorOTP table
+        otp = str(random.randint(100000, 999999))
+        DoctorOTP.objects.create(email=doctor.email, otp=otp)
+
+        # Send OTP to registered email via Django email backend
+        try:
+            subject = "Doctor Login OTP"
+            message = (
+                f"Dear Dr. {doctor.name},\n\n"
+                f"Your OTP for login is {otp}.\n"
+                f"It is valid for 5 minutes.\n\n"
+                f"If you did not request this, please ignore this email.\n\n"
+                f"CDSS COPD Team"
+            )
+            send_mail(
+                subject,
+                message,
+                settings.EMAIL_HOST_USER,
+                [doctor.email],
+                fail_silently=False,
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"OTP generated but email could not be sent: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        return Response({
+            "message": "OTP sent to registered email",
+            "doctor_email": doctor.email,
+        }, status=status.HTTP_200_OK)
 
 class DoctorSignupAPIView(APIView):
-    """
-    POST /api/doctor/signup/
-    Body: { "name": "...", "email": "...", "password": "...", "specialization": "...", "phone_number": "..." }
-    """
-    def post(self, request):
-        serializer = DoctorSignupSerializer(data=request.data)
-        if serializer.is_valid():
-            email = serializer.validated_data['email']
-            if Doctor.objects.filter(email=email).exists():
-                return Response({"error": "An account with this email already exists."}, status=status.HTTP_409_CONFLICT)
-            doctor = Doctor.objects.create(
-                name=serializer.validated_data['name'],
-                email=email,
-                password=serializer.validated_data['password'],
-                specialization=serializer.validated_data.get('specialization', ''),
-                phone_number=serializer.validated_data.get('phone_number', ''),
-                is_approved=False,
-            )
-            return Response({
-                "message": "Account created successfully. Awaiting admin approval.",
-                "doctor_id": doctor.id,
-                "name": doctor.name,
-                "email": doctor.email,
-            }, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def post(self,request):
+
+        name=request.data.get("name")
+        email=request.data.get("email")
+        password=request.data.get("password")
+
+        if Doctor.objects.filter(email=email).exists():
+            return Response({"error":"Email already exists"},status=409)
+
+        doctor=Doctor.objects.create(
+            name=name,
+            email=email,
+            password=password,
+            is_approved=False,
+            is_active=True
+        )
+
+        return Response({
+            "message":"Account created. Waiting for admin approval"
+        },status=201)
 
 
 class DoctorForgotPasswordAPIView(APIView):

@@ -3,6 +3,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.contrib.auth.hashers import make_password
+from django.core.mail import send_mail
+from django.conf import settings
 
 from .models import Staff, StaffOTP
 from .serializers import (
@@ -15,34 +17,86 @@ class StaffLoginAPIView(APIView):
     """
     POST /api/staff/login/
     Body: { "email": "...", "password": "..." }
+
+    Fetches staff from sandhiya.staff table:
+        SELECT * FROM sandhiya.staff WHERE email = <email>;
+    Validates password, checks is_approved + is_active,
+    generates OTP and sends it to the staff's registered email.
     """
     def post(self, request):
-        serializer = StaffLoginSerializer(data=request.data)
-        if serializer.is_valid():
-            email = serializer.validated_data['email']
-            password = serializer.validated_data['password']
-            try:
-                staff = Staff.objects.get(email=email)
-                if not staff.is_active:
-                    return Response({"error": "Your account has been deactivated."}, status=status.HTTP_403_FORBIDDEN)
-                if staff.check_password(password):
-                    return Response({
-                        "message": "Login successful",
-                        "role": "staff",
-                        "staff_id": staff.id,
-                        "name": staff.name,
-                        "email": staff.email,
-                        "department": staff.department,
-                        "is_approved": staff.is_approved,
-                    }, status=status.HTTP_200_OK)
-                else:
-                    return Response({"error": "Invalid password."}, status=status.HTTP_401_UNAUTHORIZED)
-            except Staff.DoesNotExist:
-                return Response({"error": "No account found with this email."}, status=status.HTTP_404_NOT_FOUND)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        email = request.data.get("email")
+        password = request.data.get("password")
 
+        if not email or not password:
+            return Response(
+                {"error": "Email and password are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # SELECT * FROM sandhiya.staff WHERE email = <email>
+        try:
+            staff = Staff.objects.get(email=email)
+        except Staff.DoesNotExist:
+            return Response(
+                {"error": "Invalid email or password"},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        # Validate hashed password stored in sandhiya.staff
+        if not staff.check_password(password):
+            return Response(
+                {"error": "Invalid email or password"},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        # Check admin approval
+        if not staff.is_approved:
+            return Response(
+                {"error": "Waiting for admin approval"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Check active status (admin may disable account after approval)
+        if not staff.is_active:
+            return Response(
+                {"error": "Your account is disabled by admin"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Generate 6-digit OTP and store in StaffOTP table
+        otp = str(random.randint(100000, 999999))
+        StaffOTP.objects.create(email=staff.email, otp=otp)
+
+        # Send OTP to the staff's registered email
+        try:
+            subject = "Staff Login OTP"
+            message = (
+                f"Dear {staff.name},\n\n"
+                f"Your OTP for login is {otp}.\n"
+                f"It will expire in 5 minutes.\n\n"
+                f"If you did not request this, please ignore this email.\n\n"
+                f"CDSS COPD Team"
+            )
+            send_mail(
+                subject,
+                message,
+                settings.EMAIL_HOST_USER,
+                [staff.email],
+                fail_silently=False,
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"OTP generated but email could not be sent: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        return Response({
+            "message": "Login successful. OTP sent to email",
+            "staff_email": staff.email,
+        }, status=status.HTTP_200_OK)
 
 class StaffSignupAPIView(APIView):
+
     """
     POST /api/staff/signup/
     Body: { "name":"...", "email":"...", "password":"...", "phone_number":"...", "department":"..." }
@@ -59,6 +113,8 @@ class StaffSignupAPIView(APIView):
                 password=serializer.validated_data['password'],
                 phone_number=serializer.validated_data.get('phone_number', ''),
                 department=serializer.validated_data.get('department', ''),
+                staff_role=serializer.validated_data.get('staff_role', 'Staff'),
+                staff_id=serializer.validated_data.get('staff_id', ''),
                 is_approved=False,
             )
             return Response({
@@ -167,6 +223,8 @@ class StaffProfileAPIView(APIView):
                 "name": staff.name,
                 "email": staff.email,
                 "department": staff.department,
+                "staff_role": staff.staff_role,
+                "staff_id_number": staff.staff_id,
                 "phone_number": staff.phone_number,
                 "is_approved": staff.is_approved,
                 "created_at": staff.created_at,

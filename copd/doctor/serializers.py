@@ -23,6 +23,18 @@ class DoctorSignupSerializer(serializers.Serializer):
     )
     specialization = serializers.CharField(max_length=255, required=False, allow_blank=True)
     phone_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    license_number = serializers.CharField(max_length=100, required=False, allow_blank=True)
+
+
+class DoctorListSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    specialization = serializers.CharField()
+    license_number = serializers.CharField()
+    status = serializers.SerializerMethodField()
+
+    def get_status(self, obj):
+        return "active" if obj.is_active else "disabled"
 
 
 class ForgotPasswordSerializer(serializers.Serializer):
@@ -41,3 +53,14 @@ class ResetPasswordSerializer(serializers.Serializer):
         min_length=6,
         error_messages={"required": "New password is required.", "min_length": "Password must be at least 6 characters."}
     )
+class DoctorDetailSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    email = serializers.EmailField()
+    specialization = serializers.CharField()
+    license_number = serializers.CharField()
+    phone = serializers.CharField(source='phone_number')
+    status = serializers.SerializerMethodField()
+
+    def get_status(self, obj):
+        return "active" if obj.is_active else "disabled"

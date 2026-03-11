@@ -5,82 +5,150 @@ from rest_framework import status
 from .models import Admin
 from .serializers import AdminLoginSerializer, AdminSignupSerializer
 from doctor.models import Doctor
+from doctor.serializers import DoctorListSerializer, DoctorDetailSerializer
 from staff.models import Staff
+from staff.serializers import StaffListSerializer, StaffDetailSerializer
+from django.contrib.auth.models import User
+
+from django.contrib.auth import authenticate
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.auth.models import User
+
+from django.contrib.auth.hashers import make_password
 
 
+class RegisterAPIView(APIView):
+
+    def post(self, request):
+
+        name = request.data.get("name")
+        email = request.data.get("email")
+        password = request.data.get("password")
+        role = request.data.get("role")
+
+        if not name or not email or not password or not role:
+            return Response(
+                {"error": "All fields are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        hashed_password = make_password(password)
+
+        if role == "doctor":
+            Doctor.objects.create(
+    name=name,
+    email=email,
+    password=hashed_password,
+    is_approved=False,
+    is_active=False
+)
+
+        elif role == "staff":
+            Staff.objects.create(
+                name=name,
+                email=email,
+                password=hashed_password,
+                is_approved=False,
+                is_active=False
+            )
+
+        else:
+            return Response(
+                {"error": "Invalid role"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response(
+            {"message": "Registration successful. Waiting for admin approval."},
+            status=status.HTTP_201_CREATED
+        )
+    
 class AdminLoginAPIView(APIView):
     """
     POST /api/admin/login/
-    Body: { "email": "...", "password": "..." }
+    Body:
+    {
+        "username": "admin",
+        "password": "admin123"
+    }
     """
-    def post(self, request):
-        serializer = AdminLoginSerializer(data=request.data)
-        if serializer.is_valid():
-            email = serializer.validated_data['email']
-            password = serializer.validated_data['password']
-            try:
-                admin = Admin.objects.get(email=email)
-                if not admin.is_active:
-                    return Response({"error": "Your account has been deactivated."}, status=status.HTTP_403_FORBIDDEN)
-                if admin.check_password(password):
-                    return Response({
-                        "message": "Login successful",
-                        "role": "admin",
-                        "admin_id": admin.id,
-                        "name": admin.name,
-                        "email": admin.email,
-                    }, status=status.HTTP_200_OK)
-                else:
-                    return Response({"error": "Invalid password."}, status=status.HTTP_401_UNAUTHORIZED)
-            except Admin.DoesNotExist:
-                return Response({"error": "No admin account found with this email."}, status=status.HTTP_404_NOT_FOUND)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
-class AdminSignupAPIView(APIView):
-    """
-    POST /api/admin/signup/
-    Body: { "name": "...", "email": "...", "password": "..." }
-    """
     def post(self, request):
-        serializer = AdminSignupSerializer(data=request.data)
-        if serializer.is_valid():
-            email = serializer.validated_data['email']
-            if Admin.objects.filter(email=email).exists():
-                return Response({"error": "An admin account with this email already exists."}, status=status.HTTP_409_CONFLICT)
-            admin = Admin.objects.create(
-                name=serializer.validated_data['name'],
-                email=email,
-                password=serializer.validated_data['password'],
+
+        username = request.data.get("username")
+        password = request.data.get("password")
+
+        if not username or not password:
+            return Response(
+                {"error": "Username and password are required"},
+                status=status.HTTP_400_BAD_REQUEST
             )
-            return Response({
-                "message": "Admin account created successfully.",
-                "admin_id": admin.id,
-                "name": admin.name,
-                "email": admin.email,
-            }, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+        user = authenticate(username=username, password=password)
+
+        if user is not None and (user.is_staff or user.is_superuser):
+
+            refresh = RefreshToken.for_user(user)
+
+            return Response({
+                "message": "Admin login successful",
+                "role": "admin",
+                "admin_id": user.id,
+                "username": user.username,
+                "access": str(refresh.access_token),
+                "refresh": str(refresh)
+            }, status=status.HTTP_200_OK)
+
+        return Response(
+            {"error": "Invalid admin credentials"},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+
+
+class AdminProfileDetailsAPIView(APIView):
+    """
+    GET /api/admin/profile/
+    Returns admin details from auth_user table (id=7).
+    """
+    def get(self, request):
+        try:
+            admin = User.objects.get(id=7)
+            return Response({
+                "admin_id": admin.id,
+                "username": admin.username,
+                "name": admin.username,
+                "email": admin.email,
+                "role": "Super Admin",
+                "permissions": "Full System Access"
+            }, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response({"error": "Admin not found"}, status=status.HTTP_404_NOT_FOUND)
 
 class AdminDashboardAPIView(APIView):
     """
-    GET /api/admin/dashboard/
-    Returns summary stats: total doctors, total staff, pending approvals.
+    GET /api/admin-user/dashboard/
+    Returns dashboard statistics.
     """
+
     def get(self, request):
+
         total_doctors = Doctor.objects.count()
         total_staff = Staff.objects.count()
+
         pending_doctors = Doctor.objects.filter(is_approved=False).count()
         pending_staff = Staff.objects.filter(is_approved=False).count()
-        total_pending = pending_doctors + pending_staff
+        total_pending_requests = pending_doctors + pending_staff
+
         return Response({
             "total_doctors": total_doctors,
             "total_staff": total_staff,
-            "total_pending_approvals": total_pending,
             "pending_doctors": pending_doctors,
             "pending_staff": pending_staff,
+            "total_pending_requests": total_pending_requests
         }, status=status.HTTP_200_OK)
-
 
 class AdminProfileAPIView(APIView):
     """
@@ -117,7 +185,9 @@ class AdminProfileAPIView(APIView):
 
 class AdminManageDoctorsAPIView(APIView):
     """
-    GET  /api/admin/doctors/         — list all doctors
+    GET  /api/admin/doctors/         — list all doctors00
+
+    
     POST /api/admin/doctors/         — toggle approve/deactivate
     """
     def get(self, request):
@@ -125,7 +195,25 @@ class AdminManageDoctorsAPIView(APIView):
             'id', 'name', 'email', 'specialization', 'phone_number', 'is_approved', 'is_active', 'created_at'
         )
         return Response({"doctors": list(doctors)}, status=status.HTTP_200_OK)
+    def post(self, request):
+        doctor_id = request.data.get("doctor_id")
+        action = request.data.get("action")
 
+        try:
+            doctor = Doctor.objects.get(id=doctor_id)
+
+            if action == "approve":
+                doctor.is_approved = True
+                doctor.save()
+
+            elif action == "deactivate":
+                doctor.is_active = False
+                doctor.save()
+
+            return Response({"message": "Doctor status updated"}, status=200)
+
+        except Doctor.DoesNotExist:
+            return Response({"error": "Doctor not found"}, status=404)
 
 class AdminRemoveDoctorAPIView(APIView):
     """
@@ -242,3 +330,225 @@ class AdminRejectRequestAPIView(APIView):
             except Staff.DoesNotExist:
                 return Response({"error": "Staff not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response({"error": "Invalid role. Must be 'doctor' or 'staff'."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AdminApprovalRequestsListAPIView(APIView):
+
+    def get(self,request):
+
+        pending_doctors=list(
+            Doctor.objects.filter(is_approved=False).values(
+                "id","name","email","created_at"
+            )
+        )
+
+        for d in pending_doctors:
+            d["user_type"]="doctor"
+
+        pending_staff=list(
+            Staff.objects.filter(is_approved=False).values(
+                "id","name","email","created_at"
+            )
+        )
+
+        for s in pending_staff:
+            s["user_type"]="staff"
+
+        return Response(pending_doctors+pending_staff)
+
+
+class AdminApproveUserAPIView(APIView):
+
+    def post(self,request):
+
+        user_id=request.data.get("user_id")
+        user_type=request.data.get("user_type")
+
+        if user_type=="doctor":
+            user=Doctor.objects.get(id=user_id)
+
+        else:
+            user=Staff.objects.get(id=user_id)
+
+        user.is_approved=True
+        user.is_active=True
+        user.save()
+
+        return Response({"message":"User approved"})
+
+
+class AdminRejectUserAPIView(APIView):
+    """
+    POST /api/admin/reject-user/
+    Body: { "user_id": 12, "user_type": "doctor", "rejected_by": "sandhiya" }
+    """
+    def post(self, request):
+        user_id = request.data.get('user_id')
+        user_type = request.data.get('user_type', 'doctor')
+
+        if not user_id:
+            return Response({"error": "user_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            if user_type == 'staff':
+                user = Staff.objects.get(id=user_id)
+            else:
+                user = Doctor.objects.get(id=user_id)
+
+            user.is_active = False
+            user.save()
+            return Response({"message": f"{user.name} has been rejected."}, status=status.HTTP_200_OK)
+        except (Doctor.DoesNotExist, Staff.DoesNotExist):
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+class AdminDoctorListAPIView(APIView):
+
+    def get(self,request):
+
+        doctors=Doctor.objects.filter(is_approved=True)
+
+        serializer=DoctorListSerializer(doctors,many=True)
+
+        return Response(serializer.data)
+
+
+class AdminDoctorToggleAPIView(APIView):
+    """
+    PATCH /api/admin/doctors/{id}/toggle/
+    Toggles the is_active status of a doctor.
+    """
+    def patch(self, request, pk):
+        try:
+            doctor = Doctor.objects.get(pk=pk)
+            doctor.is_active = not doctor.is_active
+            doctor.save()
+            status_str = "active" if doctor.is_active else "disabled"
+            return Response({
+                "message": f"Doctor status updated to {status_str}",
+                "status": status_str
+            }, status=status.HTTP_200_OK)
+        except Doctor.DoesNotExist:
+            return Response({"error": "Doctor not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class AdminDoctorToggleStatusAPIView(APIView):
+
+    def post(self,request):
+
+        doctor_id=request.data.get("doctor_id")
+        is_active=request.data.get("is_active")
+
+        doctor=Doctor.objects.get(id=doctor_id)
+
+        doctor.is_active=is_active
+        doctor.save()
+
+        return Response({
+            "message":"Doctor status updated"
+        })
+
+class AdminDoctorDetailAPIView(APIView):
+    """
+    GET    /api/admin/doctors/{id}/ — Returns detailed info.
+    DELETE /api/admin/doctors/{id}/ — Removes doctor & revokes login.
+    """
+    def get(self, request, pk):
+        try:
+            doctor = Doctor.objects.get(pk=pk)
+            serializer = DoctorDetailSerializer(doctor)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Doctor.DoesNotExist:
+            return Response({"error": "Doctor not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    def delete(self, request, pk):
+        try:
+            doctor = Doctor.objects.get(pk=pk)
+            email = doctor.email
+            name = doctor.name
+
+            # 1. Disable auth_user access if it exists
+            auth_users = User.objects.filter(email=email)
+            for u in auth_users:
+                u.is_active = False
+                u.save()
+            
+            # 2. Delete the Doctor record
+            doctor.delete()
+            return Response({"message": "Doctor removed successfully"}, status=status.HTTP_200_OK)
+        except Doctor.DoesNotExist:
+            return Response({"error": "Doctor not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class AdminStaffListAPIView(APIView):
+
+    def get(self,request):
+
+        staff=Staff.objects.filter(is_approved=True)
+
+        serializer=StaffListSerializer(staff,many=True)
+
+        return Response(serializer.data)
+
+
+class AdminStaffToggleStatusAPIView(APIView):
+
+    def post(self,request):
+
+        staff_id=request.data.get("staff_id")
+        is_active=request.data.get("is_active")
+
+        staff=Staff.objects.get(id=staff_id)
+
+        staff.is_active=is_active
+        staff.save()
+
+        return Response({
+            "message":"Staff status updated"
+        })
+
+
+class AdminStaffDetailAPIView(APIView):
+    """
+    GET    /api/admin/staff/{id}/ — Returns detailed info.
+    DELETE /api/admin/staff/{id}/ — Removes staff.
+    """
+    def get(self, request, pk):
+        try:
+            staff = Staff.objects.get(pk=pk)
+            serializer = StaffDetailSerializer(staff)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Staff.DoesNotExist:
+            return Response({"error": "Staff not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    def delete(self, request, pk):
+        try:
+            staff = Staff.objects.get(pk=pk)
+            email = staff.email
+            
+            # 1. Disable auth_user access if it exists
+            auth_users = User.objects.filter(email=email)
+            for u in auth_users:
+                u.is_active = False
+                u.save()
+
+            # 2. Delete the Staff record
+            staff.delete()
+            return Response({"message": "Staff removed successfully"}, status=status.HTTP_200_OK)
+        except Staff.DoesNotExist:
+            return Response({"error": "Staff not found"}, status=status.HTTP_404_NOT_FOUND)
+class AdminSystemStatisticsAPIView(APIView):
+
+    def get(self, request):
+
+        total_doctors = Doctor.objects.filter(is_approved=True).count()
+        total_staff = Staff.objects.filter(is_approved=True).count()
+
+        pending_doctors = Doctor.objects.filter(is_approved=False).count()
+        pending_staff = Staff.objects.filter(is_approved=False).count()
+
+        return Response({
+            "total_doctors": total_doctors,
+            "total_staff": total_staff,
+            "pending_doctors": pending_doctors,
+            "pending_staff": pending_staff
+        })

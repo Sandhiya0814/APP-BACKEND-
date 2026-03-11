@@ -41,3 +41,27 @@ class StaffResetPasswordSerializer(serializers.Serializer):
         min_length=6,
         error_messages={"required": "New password is required.", "min_length": "Password must be at least 6 characters."}
     )
+
+
+class StaffListSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    staff_role = serializers.CharField()
+    staff_id = serializers.CharField()
+    status = serializers.SerializerMethodField()
+
+    def get_status(self, obj):
+        return "active" if obj.is_active else "disabled"
+
+
+class StaffDetailSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    email = serializers.EmailField()
+    phone = serializers.CharField(source='phone_number')
+    staff_role = serializers.CharField()
+    staff_id = serializers.CharField()
+    status = serializers.SerializerMethodField()
+
+    def get_status(self, obj):
+        return "active" if obj.is_active else "disabled"

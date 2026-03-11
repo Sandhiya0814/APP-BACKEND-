@@ -2,14 +2,10 @@ from django.contrib import admin
 from django.urls import path
 
 # Splash
-from copd.views import SplashAPIView
+from copd.views import SplashAPIView, RegisterAPIView
 
 # Doctor
-from doctor.views import (
-    DoctorLoginAPIView, DoctorSignupAPIView,
-    DoctorForgotPasswordAPIView, DoctorVerifyOTPAPIView,
-    DoctorResetPasswordAPIView, DoctorDashboardAPIView, DoctorProfileAPIView
-)
+from doctor.views import *
 
 # Staff
 from staff.views import (
@@ -20,10 +16,14 @@ from staff.views import (
 
 # Admin Panel
 from admin_panel.views import (
-    AdminLoginAPIView, AdminSignupAPIView, AdminDashboardAPIView,
-    AdminProfileAPIView, AdminManageDoctorsAPIView, AdminRemoveDoctorAPIView,
+    AdminLoginAPIView, AdminDashboardAPIView,
+    AdminProfileAPIView, AdminProfileDetailsAPIView, AdminManageDoctorsAPIView, AdminRemoveDoctorAPIView,
     AdminManageStaffAPIView, AdminRemoveStaffAPIView,
-    AdminApprovalsAPIView, AdminApproveRequestAPIView, AdminRejectRequestAPIView
+    AdminApprovalsAPIView, AdminApproveRequestAPIView, AdminRejectRequestAPIView,
+    AdminApprovalRequestsListAPIView, AdminApproveUserAPIView, AdminRejectUserAPIView,
+    AdminDoctorListAPIView, AdminDoctorToggleAPIView, AdminDoctorDetailAPIView, AdminDoctorToggleStatusAPIView,
+    AdminStaffListAPIView, AdminStaffToggleStatusAPIView, AdminStaffDetailAPIView,
+    AdminSystemStatisticsAPIView
 )
 
 # Patients
@@ -56,6 +56,7 @@ urlpatterns = [
     # Splash
     # ──────────────────────────────────────────────────
     path('api/splash/', SplashAPIView.as_view(), name='splash'),
+    path('api/register/', RegisterAPIView.as_view(), name='register'),
 
     # ──────────────────────────────────────────────────
     # Doctor Auth
@@ -84,17 +85,38 @@ urlpatterns = [
     # ──────────────────────────────────────────────────
     # Admin Panel
     # ──────────────────────────────────────────────────
-    path('api/admin-user/login/', AdminLoginAPIView.as_view(), name='admin-login'),
-    path('api/admin-user/signup/', AdminSignupAPIView.as_view(), name='admin-signup'),
+       path('api/admin/login/', AdminLoginAPIView.as_view(), name='admin-login'),
+    path('api/admin/profile/', AdminProfileDetailsAPIView.as_view(), name='admin-profile-details'),
+
+    # Dashboard Statistics (ADDED FIX)
+    path('api/system-statistics/', AdminSystemStatisticsAPIView.as_view(), name='system-statistics'),
+
     path('api/admin-user/dashboard/', AdminDashboardAPIView.as_view(), name='admin-dashboard'),
     path('api/admin-user/profile/', AdminProfileAPIView.as_view(), name='admin-profile'),
+
     path('api/admin-user/doctors/', AdminManageDoctorsAPIView.as_view(), name='admin-doctors'),
     path('api/admin-user/doctors/<int:doctor_id>/remove/', AdminRemoveDoctorAPIView.as_view(), name='admin-doctor-remove'),
+
     path('api/admin-user/staff/', AdminManageStaffAPIView.as_view(), name='admin-staff'),
     path('api/admin-user/staff/<int:staff_id>/remove/', AdminRemoveStaffAPIView.as_view(), name='admin-staff-remove'),
+
     path('api/admin-user/approvals/', AdminApprovalsAPIView.as_view(), name='admin-approvals'),
     path('api/admin-user/approvals/<int:request_id>/approve/', AdminApproveRequestAPIView.as_view(), name='admin-approve'),
     path('api/admin-user/approvals/<int:request_id>/reject/', AdminRejectRequestAPIView.as_view(), name='admin-reject'),
+
+    path('api/admin/approval-requests/', AdminApprovalRequestsListAPIView.as_view(), name='admin-approval-requests-list'),
+    path('api/admin/approve-user/', AdminApproveUserAPIView.as_view(), name='admin-approve-user'),
+    path('api/admin/reject-user/', AdminRejectUserAPIView.as_view(), name='admin-reject-user'),
+
+    path('api/admin/doctors/', AdminDoctorListAPIView.as_view(), name='admin-doctor-list'),
+    path('api/admin/doctors/<int:pk>/toggle/', AdminDoctorToggleAPIView.as_view(), name='admin-doctor-toggle'),
+    path('api/admin/doctors/toggle-status/', AdminDoctorToggleStatusAPIView.as_view(), name='admin-doctor-toggle-status'),
+    path('api/admin/doctors/<int:pk>/', AdminDoctorDetailAPIView.as_view(), name='admin-doctor-detail'),
+
+    path('api/admin/staff/', AdminStaffListAPIView.as_view(), name='admin-staff-list'),
+    path('api/admin/staff/toggle-status/', AdminStaffToggleStatusAPIView.as_view(), name='admin-staff-toggle-status'),
+    path('api/admin/staff/<int:pk>/', AdminStaffDetailAPIView.as_view(), name='admin-staff-detail'),
+
 
     # ──────────────────────────────────────────────────
     # Patient Management
@@ -110,6 +132,7 @@ urlpatterns = [
     path('api/patients/<int:patient_id>/vitals/', VitalsAPIView.as_view(), name='patient-vitals'),
     path('api/patients/<int:patient_id>/abg-entry/', ABGEntryAPIView.as_view(), name='patient-abg'),
     path('api/patients/<int:patient_id>/reassessment-checklist/', ReassessmentChecklistAPIView.as_view(), name='patient-reassessment-checklist'),
+    path('api/system-statistics/', AdminSystemStatisticsAPIView.as_view(), name='system-statistics'),
 
     # ──────────────────────────────────────────────────
     # Oxygen Therapy & AI Analysis

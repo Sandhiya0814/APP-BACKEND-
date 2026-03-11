@@ -8,8 +8,10 @@ class Staff(models.Model):
     password = models.CharField(max_length=255)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     department = models.CharField(max_length=255, blank=True, null=True)
+    staff_role = models.CharField(max_length=255, default="Staff")
+    staff_id = models.CharField(max_length=50, blank=True, null=True)
     is_approved = models.BooleanField(default=False)
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
