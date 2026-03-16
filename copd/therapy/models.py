@@ -73,6 +73,7 @@ class OxygenRequirement(models.Model):
 class DeviceSelection(models.Model):
     patient_id = models.IntegerField()
     device = models.CharField(max_length=50, default='venturi')
+    flow_range = models.CharField(max_length=50, default='')
     rationale = models.TextField(default='')
     created_at = models.DateTimeField(auto_now_add=True)
 

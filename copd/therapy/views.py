@@ -604,3 +604,187 @@ class UrgentActionAPIView(APIView):
             "action_type": record.action_type,
             "status": record.status,
         }, status=status.HTTP_201_CREATED)
+
+
+class AIDeviceRecommendationAPIView(APIView):
+    """
+    GET /api/patient/device-recommendation/<patient_id>/
+    Uses trained ML model to recommend oxygen delivery device.
+    """
+    DEVICE_FLOW_MAP = {
+        'Venturi Mask': '24% - 60%',
+        'Nasal Cannula': '1 - 4 L/min',
+        'High Flow Nasal Cannula': '30 - 60 L/min',
+        'Non-Rebreather Mask': '60% - 90%',
+    }
+
+    def get(self, request, patient_id):
+        from patients.models import (
+            Patient, Vitals, AbgEntry, CurrentSymptoms,
+            BaselineDetails, GoldClassification, SpirometryData, GasExchangeHistory
+        )
+        import os, joblib, numpy as np
+        from datetime import date
+
+        # Validate patient
+        try:
+            patient = Patient.objects.get(id=patient_id)
+        except Patient.DoesNotExist:
+            return Response({"error": "Patient not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Fetch latest data from all tables
+        vitals = Vitals.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+        abg = AbgEntry.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+        symptoms = CurrentSymptoms.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+        baseline = BaselineDetails.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+        gold = GoldClassification.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+        spirometry = SpirometryData.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+        gas_exchange = GasExchangeHistory.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+
+        # Calculate age from DOB
+        today = date.today()
+        age = today.year - patient.dob.year - ((today.month, today.day) < (patient.dob.month, patient.dob.day))
+
+        # Load model and encoders
+        # Path: therapy/views.py -> therapy/ -> copd/ -> CDSS COPD/ -> CDSS_COPD/ml_model/trained_model/
+        model_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            'CDSS_COPD', 'ml_model', 'trained_model'
+        )
+
+        try:
+            model = joblib.load(os.path.join(model_dir, 'oxygen_model.pkl'))
+            le_gender = joblib.load(os.path.join(model_dir, 'gender_encoder.pkl'))
+            le_device = joblib.load(os.path.join(model_dir, 'device_encoder.pkl'))
+        except Exception as e:
+            return Response({"error": f"Failed to load ML model: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # Encode gender
+        gender_str = patient.sex if patient.sex in ['Male', 'Female'] else 'Male'
+        try:
+            gender_encoded = le_gender.transform([gender_str])[0]
+        except Exception:
+            gender_encoded = 0
+
+        # Parse GOLD stage to int
+        gold_stage = 2  # default
+        if gold:
+            try:
+                gold_stage = int(''.join(filter(str.isdigit, gold.gold_stage)) or '2')
+            except Exception:
+                gold_stage = 2
+
+        # COPD History
+        copd_history = 1 if baseline and baseline.copd_history.lower() == 'yes' else 0
+
+        # Spirometry
+        fev1_percent = spirometry.fev1_percent if spirometry else 50.0
+        fev1_fvc_ratio = spirometry.fev1_fvc_ratio if spirometry else 0.6
+
+        # Gas exchange
+        chronic_hypoxemia = 1 if gas_exchange and gas_exchange.chronic_hypoxemia.lower() == 'yes' else 0
+        home_oxygen_use = 1 if gas_exchange and gas_exchange.home_oxygen_use.lower() == 'yes' else 0
+
+        # Symptoms
+        mmrc_score = symptoms.mmrc_score if symptoms else 2
+        cough = int(symptoms.increased_cough) if symptoms else 0
+        sputum = int(symptoms.increased_sputum) if symptoms else 0
+        wheezing_val = int(symptoms.wheezing) if symptoms else 0
+        fever_val = int(symptoms.fever) if symptoms else 0
+        chest_tightness = int(symptoms.chest_tightness) if symptoms else 0
+
+        # Vitals
+        spo2 = vitals.spo2 if vitals else 90
+        rr = vitals.respiratory_rate if vitals else 20
+        hr = vitals.heart_rate if vitals else 80
+        temp = vitals.temperature if vitals else 37.0
+
+        # Blood pressure parsing
+        bp_systolic, bp_diastolic = 120, 80
+        if vitals and vitals.blood_pressure:
+            try:
+                parts = vitals.blood_pressure.split('/')
+                bp_systolic = int(parts[0])
+                bp_diastolic = int(parts[1])
+            except Exception:
+                pass
+
+        # ABG values
+        ph = abg.ph if abg else 7.38
+        pao2 = abg.pao2 if abg else 75.0
+        paco2 = abg.paco2 if abg else 42.0
+        hco3 = abg.hco3 if abg else 24.0
+
+        # Build feature vector (same order as training data)
+        # Columns: Age, Gender, COPD_History, GOLD_Stage, FEV1_percent_predicted, FEV1_FVC_ratio,
+        #   Chronic_Hypoxemia, Home_Oxygen_Use, Dyspnea_mMRC, Cough, Sputum, Wheezing, Fever,
+        #   Chest_Tightness, SpO2, Respiratory_Rate, Heart_Rate, Temperature_C,
+        #   BP_Systolic, BP_Diastolic, pH, PaO2, PaCO2, HCO3
+        features = np.array([[
+            age, gender_encoded, copd_history, gold_stage,
+            fev1_percent, fev1_fvc_ratio,
+            chronic_hypoxemia, home_oxygen_use,
+            mmrc_score, cough, sputum, wheezing_val, fever_val, chest_tightness,
+            spo2, rr, hr, temp,
+            bp_systolic, bp_diastolic,
+            ph, pao2, paco2, hco3
+        ]])
+
+        # Run prediction
+        try:
+            prediction = model.predict(features)[0]
+            probabilities = model.predict_proba(features)[0]
+            confidence = float(max(probabilities))
+            recommended_device = le_device.inverse_transform([prediction])[0]
+        except Exception as e:
+            return Response({"error": f"Prediction failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        flow_range = self.DEVICE_FLOW_MAP.get(recommended_device, '')
+
+        return Response({
+            "patient_id": patient_id,
+            "recommended_device": recommended_device,
+            "target_spo2": "88-92",
+            "flow_range": flow_range,
+            "confidence_score": round(confidence, 2),
+            "input_features": {
+                "spo2": spo2,
+                "respiratory_rate": rr,
+                "ph": ph,
+                "paco2": paco2,
+                "age": age,
+            }
+        }, status=status.HTTP_200_OK)
+
+
+class CustomDeviceSelectionAPIView(APIView):
+    """
+    POST /api/patient/device-selection/
+    Body: { "patient_id": 5, "selected_device": "Venturi Mask", "flow_range": "24% - 60%" }
+    """
+    def post(self, request):
+        patient_id = request.data.get('patient_id')
+        if not patient_id:
+            return Response({"error": "patient_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from patients.models import Patient
+            Patient.objects.get(id=patient_id)
+        except Exception:
+            return Response({"error": "Patient not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        device = request.data.get('selected_device', '')
+        flow_range = request.data.get('flow_range', '')
+
+        record = DeviceSelection.objects.create(
+            patient_id=patient_id,
+            device=device,
+            flow_range=flow_range,
+            rationale=f"AI recommended: {device}",
+        )
+        return Response({
+            "message": "Device selection saved successfully",
+            "patient_id": patient_id,
+            "device": record.device
+        }, status=status.HTTP_201_CREATED)
+

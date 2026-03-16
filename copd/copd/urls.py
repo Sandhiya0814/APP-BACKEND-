@@ -41,7 +41,8 @@ from therapy.views import (
     OxygenStatusAPIView, AIAnalysisAPIView, ABGTrendsAPIView,
     TrendAnalysisAPIView, HypoxemiaCauseAPIView, CustomHypoxemiaCauseAPIView, 
     OxygenRequirementAPIView, CustomOxygenRequirementAPIView,
-    DeviceSelectionAPIView, ReviewRecommendationAPIView,
+    DeviceSelectionAPIView, CustomDeviceSelectionAPIView, AIDeviceRecommendationAPIView,
+    ReviewRecommendationAPIView,
     TherapyRecommendationAPIView, NIVRecommendationAPIView,
     EscalationCriteriaAPIView, ScheduleReassessmentAPIView, UrgentActionAPIView
 )
@@ -151,6 +152,8 @@ urlpatterns = [
     path('api/patient/hypoxemia-cause/', CustomHypoxemiaCauseAPIView.as_view(), name='patient-hypoxemia-cause'),
     path('api/patient/oxygen-requirement/', CustomOxygenRequirementAPIView.as_view(), name='patient-custom-oxygen-req'),
     path('api/patients/<int:patient_id>/oxygen-requirement/', OxygenRequirementAPIView.as_view(), name='patient-oxygen-req'),
+    path('api/patient/device-recommendation/<int:patient_id>/', AIDeviceRecommendationAPIView.as_view(), name='patient-device-recommendation'),
+    path('api/patient/device-selection/', CustomDeviceSelectionAPIView.as_view(), name='patient-custom-device-selection'),
     path('api/patients/<int:patient_id>/device-selection/', DeviceSelectionAPIView.as_view(), name='patient-device-selection'),
     path('api/patients/<int:patient_id>/review-recommendation/', ReviewRecommendationAPIView.as_view(), name='patient-review-recommendation'),
     path('api/patients/<int:patient_id>/therapy-recommendation/', TherapyRecommendationAPIView.as_view(), name='patient-therapy'),
