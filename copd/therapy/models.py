@@ -60,9 +60,10 @@ class HypoxemiaCause(models.Model):
 
 class OxygenRequirement(models.Model):
     patient_id = models.IntegerField()
-    lpm_required = models.FloatField(default=2.0)
-    target_spo2 = models.FloatField(default=90.0)
-    rationale = models.TextField(default='')
+    spo2 = models.FloatField(default=0.0)
+    hypoxemia_level = models.CharField(max_length=50, default='')
+    symptoms_level = models.CharField(max_length=50, default='')
+    oxygen_required = models.CharField(max_length=20, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -39,7 +39,8 @@ from patients.views import (
 # Therapy
 from therapy.views import (
     OxygenStatusAPIView, AIAnalysisAPIView, ABGTrendsAPIView,
-    TrendAnalysisAPIView, HypoxemiaCauseAPIView, CustomHypoxemiaCauseAPIView, OxygenRequirementAPIView,
+    TrendAnalysisAPIView, HypoxemiaCauseAPIView, CustomHypoxemiaCauseAPIView, 
+    OxygenRequirementAPIView, CustomOxygenRequirementAPIView,
     DeviceSelectionAPIView, ReviewRecommendationAPIView,
     TherapyRecommendationAPIView, NIVRecommendationAPIView,
     EscalationCriteriaAPIView, ScheduleReassessmentAPIView, UrgentActionAPIView
@@ -138,7 +139,6 @@ urlpatterns = [
     path('api/vitals/add/', AddVitalsAPIView.as_view(), name='vitals-add'),
     path('api/abg-entry/add/', AddAbgEntryAPIView.as_view(), name='abg-entry-add'),
     path('api/patients/<int:patient_id>/reassessment-checklist/', ReassessmentChecklistAPIView.as_view(), name='patient-reassessment-checklist'),
-    path('api/system-statistics/', AdminSystemStatisticsAPIView.as_view(), name='system-statistics'),
 
     # ──────────────────────────────────────────────────
     # Oxygen Therapy & AI Analysis
@@ -149,6 +149,7 @@ urlpatterns = [
     path('api/patients/<int:patient_id>/abg-trends/', ABGTrendsAPIView.as_view(), name='patient-abg-trends'),
     path('api/patient/trend-analysis/<int:patient_id>/', CustomTrendAnalysisAPIView.as_view(), name='patient-trend-analysis'),
     path('api/patient/hypoxemia-cause/', CustomHypoxemiaCauseAPIView.as_view(), name='patient-hypoxemia-cause'),
+    path('api/patient/oxygen-requirement/', CustomOxygenRequirementAPIView.as_view(), name='patient-custom-oxygen-req'),
     path('api/patients/<int:patient_id>/oxygen-requirement/', OxygenRequirementAPIView.as_view(), name='patient-oxygen-req'),
     path('api/patients/<int:patient_id>/device-selection/', DeviceSelectionAPIView.as_view(), name='patient-device-selection'),
     path('api/patients/<int:patient_id>/review-recommendation/', ReviewRecommendationAPIView.as_view(), name='patient-review-recommendation'),

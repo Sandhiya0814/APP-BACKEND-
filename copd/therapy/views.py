@@ -231,45 +231,78 @@ class OxygenRequirementAPIView(APIView):
         if latest:
             return Response({
                 "patient_id": patient_id,
-                "lpm_required": latest.lpm_required,
-                "target_spo2": latest.target_spo2,
-                "rationale": latest.rationale,
+                "spo2": latest.spo2,
+                "hypoxemia_level": latest.hypoxemia_level,
+                "symptoms_level": latest.symptoms_level,
+                "oxygen_required": latest.oxygen_required,
                 "recorded_at": latest.created_at,
             }, status=status.HTTP_200_OK)
         # Auto-compute from patient data
         from patients.models import Vitals, ABGEntry
         latest_vitals = Vitals.objects.filter(patient_id=patient_id).order_by('-created_at').first()
-        lpm = 2.0
-        target = 90.0
-        rationale = "Standard COPD oxygen therapy target (88–92% SpO2)."
+        hypoxemia_level = 'Moderate'
+        symptoms_level = 'Moderate'
+        oxygen_required = 'Yes'
         if latest_vitals:
             if latest_vitals.spo2 < 88:
-                lpm = 4.0
-                rationale = "Increased flow rate due to SpO2 < 88%."
+                hypoxemia_level = 'Severe'
+                symptoms_level = 'Severe'
             elif latest_vitals.spo2 < 92:
-                lpm = 2.0
+                hypoxemia_level = 'Moderate'
+                symptoms_level = 'Moderate'
         return Response({
             "patient_id": patient_id,
-            "lpm_required": lpm,
-            "target_spo2": target,
-            "rationale": rationale,
+            "spo2": latest_vitals.spo2 if latest_vitals else 0.0,
+            "hypoxemia_level": hypoxemia_level,
+            "symptoms_level": symptoms_level,
+            "oxygen_required": oxygen_required,
         }, status=status.HTTP_200_OK)
 
     def post(self, request, patient_id):
         patient, err = get_patient_or_404(patient_id)
         if err:
             return err
-        lpm = request.data.get('lpm_required')
-        target = request.data.get('target_spo2')
-        if not lpm or not target:
-            return Response({"error": "lpm_required and target_spo2 are required."}, status=status.HTTP_400_BAD_REQUEST)
+        spo2 = request.data.get('spo2')
+        if spo2 is None:
+            return Response({"error": "spo2 is required."}, status=status.HTTP_400_BAD_REQUEST)
         record = OxygenRequirement.objects.create(
             patient_id=patient_id,
-            lpm_required=float(lpm),
-            target_spo2=float(target),
-            rationale=request.data.get('rationale', ''),
+            spo2=float(spo2),
+            hypoxemia_level=request.data.get('hypoxemia_level', ''),
+            symptoms_level=request.data.get('symptoms_level', ''),
+            oxygen_required=request.data.get('oxygen_required', ''),
         )
-        return Response({"message": "Oxygen requirement saved.", "patient_id": patient_id, "lpm_required": record.lpm_required}, status=status.HTTP_201_CREATED)
+        return Response({
+            "message": "Oxygen requirement saved.", 
+            "patient_id": patient_id, 
+            "spo2": record.spo2
+        }, status=status.HTTP_201_CREATED)
+
+class CustomOxygenRequirementAPIView(APIView):
+    """
+    POST /api/patient/oxygen-requirement/
+    Body: { "patient_id": 5, "spo2": 86, "hypoxemia_level": "Severe", "symptoms_level": "Moderate", "oxygen_required": "Yes" }
+    """
+    def post(self, request):
+        patient_id = request.data.get('patient_id')
+        if not patient_id:
+             return Response({"error": "patient_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+             
+        try:
+            from patients.models import Patient
+            patient = Patient.objects.get(id=patient_id)
+        except Exception:
+            return Response({"error": "Patient not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        spo2 = request.data.get('spo2')
+        record = OxygenRequirement.objects.create(
+            patient_id=patient_id,
+            spo2=float(spo2) if spo2 is not None else 0.0,
+            hypoxemia_level=request.data.get('hypoxemia_level', ''),
+            symptoms_level=request.data.get('symptoms_level', ''),
+            oxygen_required=request.data.get('oxygen_required', '')
+        )
+        return Response({"message": "Oxygen requirement saved successfully"}, status=status.HTTP_201_CREATED)
 
 
 class CustomHypoxemiaCauseAPIView(APIView):
@@ -388,7 +421,7 @@ class TherapyRecommendationAPIView(APIView):
         return Response({
             "patient_id": patient_id,
             "therapy_type": "Controlled Oxygen Therapy",
-            "flow_rate": o2_req.lpm_required if o2_req else 2.0,
+            "flow_rate": 2.0, # Defaulting since lpm_required is removed
             "device": device_sel.device if device_sel else "venturi",
             "duration": "Continuous",
             "precautions": "Maintain SpO2 88–92%. Avoid high-flow oxygen in COPD patients.",

@@ -309,24 +309,24 @@ class AdminRejectRequestAPIView(APIView):
     """
     POST /api/admin/approvals/<request_id>/reject/
     Body: { "role": "doctor" | "staff" }
-    Deactivates the account.
+    Permanently deletes the record from the database.
     """
     def post(self, request, request_id):
         role = request.data.get('role')
         if role == 'doctor':
             try:
                 doctor = Doctor.objects.get(id=request_id)
-                doctor.is_active = False
-                doctor.save()
-                return Response({"message": f"Dr. {doctor.name}'s request has been rejected."}, status=status.HTTP_200_OK)
+                name = doctor.name
+                doctor.delete()
+                return Response({"message": f"Dr. {name}'s request has been rejected and removed permanently."}, status=status.HTTP_200_OK)
             except Doctor.DoesNotExist:
                 return Response({"error": "Doctor not found."}, status=status.HTTP_404_NOT_FOUND)
         elif role == 'staff':
             try:
                 staff = Staff.objects.get(id=request_id)
-                staff.is_active = False
-                staff.save()
-                return Response({"message": f"{staff.name}'s request has been rejected."}, status=status.HTTP_200_OK)
+                name = staff.name
+                staff.delete()
+                return Response({"message": f"{name}'s request has been rejected and removed permanently."}, status=status.HTTP_200_OK)
             except Staff.DoesNotExist:
                 return Response({"error": "Staff not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response({"error": "Invalid role. Must be 'doctor' or 'staff'."}, status=status.HTTP_400_BAD_REQUEST)
@@ -344,6 +344,7 @@ class AdminApprovalRequestsListAPIView(APIView):
 
         for d in pending_doctors:
             d["user_type"]="doctor"
+            d["role"]="Doctor"
 
         pending_staff=list(
             Staff.objects.filter(is_approved=False).values(
@@ -353,6 +354,7 @@ class AdminApprovalRequestsListAPIView(APIView):
 
         for s in pending_staff:
             s["user_type"]="staff"
+            s["role"]="Staff"
 
         return Response(pending_doctors+pending_staff)
 
@@ -380,7 +382,8 @@ class AdminApproveUserAPIView(APIView):
 class AdminRejectUserAPIView(APIView):
     """
     POST /api/admin/reject-user/
-    Body: { "user_id": 12, "user_type": "doctor", "rejected_by": "sandhiya" }
+    Body: { "user_id": 12, "user_type": "doctor" }
+    Permanently deletes the record from the database.
     """
     def post(self, request):
         user_id = request.data.get('user_id')
@@ -395,9 +398,9 @@ class AdminRejectUserAPIView(APIView):
             else:
                 user = Doctor.objects.get(id=user_id)
 
-            user.is_active = False
-            user.save()
-            return Response({"message": f"{user.name} has been rejected."}, status=status.HTTP_200_OK)
+            name = user.name
+            user.delete()
+            return Response({"message": f"{name} has been rejected and removed permanently."}, status=status.HTTP_200_OK)
         except (Doctor.DoesNotExist, Staff.DoesNotExist):
             return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -550,5 +553,6 @@ class AdminSystemStatisticsAPIView(APIView):
             "total_doctors": total_doctors,
             "total_staff": total_staff,
             "pending_doctors": pending_doctors,
-            "pending_staff": pending_staff
+            "pending_staff": pending_staff,
+            "total_pending_requests": pending_doctors + pending_staff
         })
