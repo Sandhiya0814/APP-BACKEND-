@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import (
     Patient, BaselineDetails, GoldClassification, SpirometryData,
-    GasExchangeHistory, CurrentSymptoms, Vitals, ABGEntry, ReassessmentChecklist
+    GasExchangeHistory, CurrentSymptoms, Vitals, AbgEntry, ReassessmentChecklist
 )
 
 
@@ -13,7 +13,7 @@ class PatientSerializer(serializers.ModelSerializer):
 
 class AddPatientSerializer(serializers.Serializer):
     full_name = serializers.CharField(max_length=255, error_messages={"required": "Full name is required."})
-    dob = serializers.DateField(error_messages={"required": "Date of birth is required."})
+    date_of_birth = serializers.DateField(error_messages={"required": "Date of birth is required."})
     sex = serializers.ChoiceField(choices=['Male', 'Female', 'Other'], error_messages={"required": "Sex is required."})
     ward = serializers.CharField(max_length=100, error_messages={"required": "Ward is required."})
     bed_number = serializers.CharField(max_length=50, error_messages={"required": "Bed number is required."})
@@ -100,7 +100,7 @@ class VitalsInputSerializer(serializers.Serializer):
 
 class ABGEntrySerializer(serializers.ModelSerializer):
     class Meta:
-        model = ABGEntry
+        model = AbgEntry
         fields = '__all__'
 
 

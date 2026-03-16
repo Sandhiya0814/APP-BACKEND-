@@ -195,7 +195,7 @@ class HypoxemiaCauseAPIView(APIView):
     POST /api/patients/<patient_id>/hypoxemia-cause/
     Body: { cause: "vq_mismatch"|"hypoventilation"|"diffusion"|"shunt"|"unknown" }
     """
-    VALID_CAUSES = ['vq_mismatch', 'hypoventilation', 'diffusion', 'shunt', 'unknown']
+    VALID_CAUSES = ['V/Q Mismatch', 'Alveolar Hypoventilation', 'Diffusion Impairment', 'Intrapulmonary Shunt', 'Unknown']
 
     def get(self, request, patient_id):
         patient, err = get_patient_or_404(patient_id)
@@ -214,7 +214,7 @@ class HypoxemiaCauseAPIView(APIView):
         if cause not in self.VALID_CAUSES:
             return Response({"error": f"cause must be one of: {', '.join(self.VALID_CAUSES)}"}, status=status.HTTP_400_BAD_REQUEST)
         record = HypoxemiaCause.objects.create(patient_id=patient_id, cause=cause)
-        return Response({"message": "Hypoxemia cause saved.", "patient_id": patient_id, "cause": record.cause}, status=status.HTTP_201_CREATED)
+        return Response({"message": "Cause saved successfully", "patient_id": patient_id, "cause": record.cause}, status=status.HTTP_201_CREATED)
 
 
 class OxygenRequirementAPIView(APIView):
@@ -270,6 +270,35 @@ class OxygenRequirementAPIView(APIView):
             rationale=request.data.get('rationale', ''),
         )
         return Response({"message": "Oxygen requirement saved.", "patient_id": patient_id, "lpm_required": record.lpm_required}, status=status.HTTP_201_CREATED)
+
+
+class CustomHypoxemiaCauseAPIView(APIView):
+    """
+    POST /api/patient/hypoxemia-cause/
+    Body: { "patient_id": 3, "cause": "V/Q Mismatch" }
+    """
+    VALID_CAUSES = ['V/Q Mismatch', 'Alveolar Hypoventilation', 'Diffusion Impairment', 'Intrapulmonary Shunt', 'Unknown']
+
+    def post(self, request):
+        patient_id = request.data.get('patient_id')
+        cause = request.data.get('cause')
+        
+        if not patient_id:
+            return Response({"error": "patient_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            from patients.models import Patient
+            patient = Patient.objects.get(id=patient_id)
+        except Exception:
+            return Response({"error": "Patient not found."}, status=status.HTTP_404_NOT_FOUND)
+            
+        if cause not in self.VALID_CAUSES:
+            return Response({"error": f"cause must be one of: {', '.join(self.VALID_CAUSES)}"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        record = HypoxemiaCause.objects.create(patient_id=patient_id, cause=cause)
+        return Response({
+            "message": "Cause saved successfully"
+        }, status=status.HTTP_201_CREATED)
 
 
 class DeviceSelectionAPIView(APIView):

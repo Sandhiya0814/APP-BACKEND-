@@ -162,20 +162,62 @@ class DoctorDashboardAPIView(APIView):
     Returns summary stats for the doctor dashboard.
     """
     def get(self, request):
-        from patients.models import Patient
-        total = Patient.objects.count()
-        critical = Patient.objects.filter(status='critical').count()
-        warning = Patient.objects.filter(status='warning').count()
-        stable = Patient.objects.filter(status='stable').count()
-        recent_patients = Patient.objects.order_by('-created_at')[:5].values(
-            'id', 'full_name', 'ward', 'bed_number', 'status', 'created_at'
-        )
+        from patients.models import Patient, Vitals
+        
+        patients = Patient.objects.all().exclude(full_name='Jane Doe')
+        total_patients = patients.count()
+        
+        critical_count = 0
+        warning_count = 0
+        stable_count = 0
+        needs_attention = []
+
+        for p in patients:
+            # Fetch latest vitals
+            latest_vital = Vitals.objects.filter(patient_id=p.id).order_by('-created_at').first()
+            
+            spo2_val = latest_vital.spo2 if latest_vital and latest_vital.spo2 is not None else None
+            rr_val = latest_vital.respiratory_rate if latest_vital and latest_vital.respiratory_rate is not None else None
+            
+            display_status = p.status # Default fallback
+            
+            if spo2_val is not None:
+                if spo2_val < 88:
+                    display_status = 'critical'
+                    critical_count += 1
+                elif spo2_val <= 92:
+                    display_status = 'warning'
+                    warning_count += 1
+                else:
+                    display_status = 'stable'
+                    stable_count += 1
+            else:
+                # If no vitals, use the status in DB for classification in counts
+                if p.status == 'critical':
+                    critical_count += 1
+                elif p.status == 'warning':
+                    warning_count += 1
+                else:
+                    stable_count += 1
+
+            # Add to Needs Attention list if Critical or Warning
+            if display_status in ['critical', 'warning']:
+                needs_attention.append({
+                    "name": p.full_name,
+                    "patient_id": p.id,
+                    "room": p.bed_number,
+                    "room_number": p.bed_number, # Adding both as per instructions/example
+                    "spo2": spo2_val if spo2_val is not None else "--",
+                    "respiratory_rate": rr_val if rr_val is not None else "--",
+                    "status": display_status.upper()
+                })
+
         return Response({
-            "total_patients": total,
-            "critical_patients": critical,
-            "warning_patients": warning,
-            "stable_patients": stable,
-            "recent_patients": list(recent_patients),
+            "total_patients": total_patients,
+            "critical_count": critical_count,
+            "warning_count": warning_count,
+            "stable_count": stable_count,
+            "needs_attention_patients": needs_attention,
         }, status=status.HTTP_200_OK)
 
 

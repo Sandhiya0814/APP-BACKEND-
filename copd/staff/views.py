@@ -195,7 +195,7 @@ class StaffDashboardAPIView(APIView):
         critical = Patient.objects.filter(status='critical').count()
         warning = Patient.objects.filter(status='warning').count()
         stable = Patient.objects.filter(status='stable').count()
-        recent_patients = Patient.objects.order_by('-created_at')[:5].values(
+        recent_patients = Patient.objects.all().exclude(full_name='Jane Doe').order_by('-created_at')[:5].values(
             'id', 'full_name', 'ward', 'bed_number', 'status', 'created_at'
         )
         return Response({
@@ -245,3 +245,89 @@ class StaffProfileAPIView(APIView):
             return Response({"message": "Profile updated successfully."}, status=status.HTTP_200_OK)
         except Staff.DoesNotExist:
             return Response({"error": "Staff not found."}, status=status.HTTP_404_NOT_FOUND)
+
+class StaffPatientsAPIView(APIView):
+    """
+    GET /api/staff/patients/
+    Return fields: id, name, age, ward / room, spo2, respiratory_rate, status
+    """
+    def get(self, request):
+        from patients.models import Patient, Vitals
+        from datetime import date
+        patients = Patient.objects.all().exclude(full_name='Jane Doe')
+        data = []
+        for p in patients:
+            
+            # Fetch the single latest vitals record
+            latest_vital = Vitals.objects.filter(patient_id=p.id).order_by('-created_at').first()
+            
+            spo2_val = latest_vital.spo2 if latest_vital and latest_vital.spo2 is not None else None
+            spo2_str = str(spo2_val) if spo2_val is not None else "--"
+            rr_str = str(latest_vital.respiratory_rate) if latest_vital and latest_vital.respiratory_rate is not None else "--"
+            
+            # Dynamic status based on SpO2
+            if spo2_val is not None:
+                if spo2_val < 88:
+                    display_status = 'critical'
+                elif spo2_val <= 92:
+                    display_status = 'warning'
+                else:
+                    display_status = 'stable'
+            else:
+                display_status = p.status
+
+            data.append({
+                "id": p.id,
+                "name": p.full_name,
+                "ward_no": p.ward,
+                "room_no": p.bed_number,
+                "spo2": spo2_str,
+                "respiratory_rate": rr_str,
+                "status": display_status
+            })
+            
+        # Sorting: Critical -> Warning -> Stable
+        status_priority = {'critical': 0, 'warning': 1, 'stable': 2}
+        data.sort(key=lambda x: status_priority.get(x['status'].lower(), 3))
+        
+        return Response(data, status=status.HTTP_200_OK)
+
+
+class StaffUpdateVitalsAPIView(APIView):
+    """
+    PUT /api/staff/update-vitals/<patient_id>/
+    """
+    def put(self, request, patient_id):
+        from patients.models import Vitals
+        vital = Vitals.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+        if not vital:
+            return Response({"error": "No existing vitals found to update"}, status=status.HTTP_404_NOT_FOUND)
+        
+        vital.spo2 = request.data.get('spo2', vital.spo2)
+        vital.respiratory_rate = request.data.get('respiratory_rate', vital.respiratory_rate)
+        vital.heart_rate = request.data.get('heart_rate', vital.heart_rate)
+        vital.temperature = request.data.get('temperature', vital.temperature)
+        vital.blood_pressure = request.data.get('blood_pressure', vital.blood_pressure)
+        vital.save()
+        
+        return Response({"message": "Vitals updated successfully"}, status=status.HTTP_200_OK)
+
+
+class StaffUpdateAbgAPIView(APIView):
+    """
+    PUT /api/staff/update-abg/<patient_id>/
+    """
+    def put(self, request, patient_id):
+        from patients.models import AbgEntry
+        abg = AbgEntry.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+        if not abg:
+            return Response({"error": "No existing ABG entry found to update"}, status=status.HTTP_404_NOT_FOUND)
+            
+        abg.ph = request.data.get('ph', abg.ph)
+        abg.pao2 = request.data.get('pao2', abg.pao2)
+        abg.paco2 = request.data.get('paco2', abg.paco2)
+        abg.hco3 = request.data.get('hco3', abg.hco3)
+        abg.fio2 = request.data.get('fio2', abg.fio2)
+        abg.save()
+        
+        return Response({"message": "ABG updated successfully"}, status=status.HTTP_200_OK)

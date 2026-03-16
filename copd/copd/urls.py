@@ -11,7 +11,8 @@ from doctor.views import *
 from staff.views import (
     StaffLoginAPIView, StaffSignupAPIView,
     StaffForgotPasswordAPIView, StaffVerifyOTPAPIView,
-    StaffResetPasswordAPIView, StaffDashboardAPIView, StaffProfileAPIView
+    StaffResetPasswordAPIView, StaffDashboardAPIView, StaffProfileAPIView,
+    StaffPatientsAPIView, StaffUpdateVitalsAPIView, StaffUpdateAbgAPIView
 )
 
 # Admin Panel
@@ -29,15 +30,16 @@ from admin_panel.views import (
 # Patients
 from patients.views import (
     AddPatientAPIView, PatientListAPIView, PatientDetailAPIView,
-    BaselineDetailsAPIView, GoldClassificationAPIView, SpirometryDataAPIView,
-    GasExchangeHistoryAPIView, CurrentSymptomsAPIView, VitalsAPIView,
-    ABGEntryAPIView, ReassessmentChecklistAPIView
+    PatientDetailsForDoctorAPIView,
+    AddBaselineDetailsAPIView, AddGoldClassificationAPIView, AddSpirometryAPIView,
+    AddGasExchangeHistoryAPIView, AddCurrentSymptomsAPIView, AddVitalsAPIView,
+    AddAbgEntryAPIView, ReassessmentChecklistAPIView, AIRiskAPIView, CustomTrendAnalysisAPIView
 )
 
 # Therapy
 from therapy.views import (
     OxygenStatusAPIView, AIAnalysisAPIView, ABGTrendsAPIView,
-    TrendAnalysisAPIView, HypoxemiaCauseAPIView, OxygenRequirementAPIView,
+    TrendAnalysisAPIView, HypoxemiaCauseAPIView, CustomHypoxemiaCauseAPIView, OxygenRequirementAPIView,
     DeviceSelectionAPIView, ReviewRecommendationAPIView,
     TherapyRecommendationAPIView, NIVRecommendationAPIView,
     EscalationCriteriaAPIView, ScheduleReassessmentAPIView, UrgentActionAPIView
@@ -81,6 +83,9 @@ urlpatterns = [
     path('api/staff/dashboard/', StaffDashboardAPIView.as_view(), name='staff-dashboard'),
     path('api/staff/profile/', StaffProfileAPIView.as_view(), name='staff-profile'),
     path('api/staff/alerts/', StaffAlertsAPIView.as_view(), name='staff-alerts'),
+    path('api/staff/patients/', PatientListAPIView.as_view(), name='staff-patients'),
+    path('api/staff/update-vitals/<int:patient_id>/', StaffUpdateVitalsAPIView.as_view(), name='staff-update-vitals'),
+    path('api/staff/update-abg/<int:patient_id>/', StaffUpdateAbgAPIView.as_view(), name='staff-update-abg'),
 
     # ──────────────────────────────────────────────────
     # Admin Panel
@@ -124,13 +129,14 @@ urlpatterns = [
     path('api/patients/', PatientListAPIView.as_view(), name='patient-list'),
     path('api/patients/add/', AddPatientAPIView.as_view(), name='patient-add'),
     path('api/patients/<int:patient_id>/', PatientDetailAPIView.as_view(), name='patient-detail'),
-    path('api/patients/<int:patient_id>/baseline/', BaselineDetailsAPIView.as_view(), name='patient-baseline'),
-    path('api/patients/<int:patient_id>/gold-classification/', GoldClassificationAPIView.as_view(), name='patient-gold'),
-    path('api/patients/<int:patient_id>/spirometry/', SpirometryDataAPIView.as_view(), name='patient-spirometry'),
-    path('api/patients/<int:patient_id>/gas-exchange/', GasExchangeHistoryAPIView.as_view(), name='patient-gas-exchange'),
-    path('api/patients/<int:patient_id>/symptoms/', CurrentSymptomsAPIView.as_view(), name='patient-symptoms'),
-    path('api/patients/<int:patient_id>/vitals/', VitalsAPIView.as_view(), name='patient-vitals'),
-    path('api/patients/<int:patient_id>/abg-entry/', ABGEntryAPIView.as_view(), name='patient-abg'),
+    path('api/patient/details/<int:patient_id>/', PatientDetailsForDoctorAPIView.as_view(), name='patient-details-doctor'),
+    path('api/baseline-details/add/', AddBaselineDetailsAPIView.as_view(), name='baseline-details-add'),
+    path('api/gold-classification/add/', AddGoldClassificationAPIView.as_view(), name='gold-classification-add'),
+    path('api/spirometry/add/', AddSpirometryAPIView.as_view(), name='spirometry-add'),
+    path('api/gas-exchange-history/add/', AddGasExchangeHistoryAPIView.as_view(), name='gas-exchange-history-add'),
+    path('api/current-symptoms/add/', AddCurrentSymptomsAPIView.as_view(), name='current-symptoms-add'),
+    path('api/vitals/add/', AddVitalsAPIView.as_view(), name='vitals-add'),
+    path('api/abg-entry/add/', AddAbgEntryAPIView.as_view(), name='abg-entry-add'),
     path('api/patients/<int:patient_id>/reassessment-checklist/', ReassessmentChecklistAPIView.as_view(), name='patient-reassessment-checklist'),
     path('api/system-statistics/', AdminSystemStatisticsAPIView.as_view(), name='system-statistics'),
 
@@ -139,9 +145,10 @@ urlpatterns = [
     # ──────────────────────────────────────────────────
     path('api/patients/<int:patient_id>/oxygen-status/', OxygenStatusAPIView.as_view(), name='patient-oxygen-status'),
     path('api/patients/<int:patient_id>/ai-analysis/', AIAnalysisAPIView.as_view(), name='patient-ai-analysis'),
+    path('api/patient/ai-risk/<int:patient_id>/', AIRiskAPIView.as_view(), name='patient-ai-risk'),
     path('api/patients/<int:patient_id>/abg-trends/', ABGTrendsAPIView.as_view(), name='patient-abg-trends'),
-    path('api/patients/<int:patient_id>/trend-analysis/', TrendAnalysisAPIView.as_view(), name='patient-trend-analysis'),
-    path('api/patients/<int:patient_id>/hypoxemia-cause/', HypoxemiaCauseAPIView.as_view(), name='patient-hypoxemia-cause'),
+    path('api/patient/trend-analysis/<int:patient_id>/', CustomTrendAnalysisAPIView.as_view(), name='patient-trend-analysis'),
+    path('api/patient/hypoxemia-cause/', CustomHypoxemiaCauseAPIView.as_view(), name='patient-hypoxemia-cause'),
     path('api/patients/<int:patient_id>/oxygen-requirement/', OxygenRequirementAPIView.as_view(), name='patient-oxygen-req'),
     path('api/patients/<int:patient_id>/device-selection/', DeviceSelectionAPIView.as_view(), name='patient-device-selection'),
     path('api/patients/<int:patient_id>/review-recommendation/', ReviewRecommendationAPIView.as_view(), name='patient-review-recommendation'),

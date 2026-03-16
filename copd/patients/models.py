@@ -33,8 +33,8 @@ class Patient(models.Model):
 
 
 class BaselineDetails(models.Model):
-    patient = models.OneToOneField(Patient, on_delete=models.CASCADE, related_name='baseline')
-    has_previous_diagnosis = models.BooleanField(default=False)
+    patient_id = models.IntegerField()
+    copd_history = models.CharField(max_length=20)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -42,14 +42,8 @@ class BaselineDetails(models.Model):
 
 
 class GoldClassification(models.Model):
-    GOLD_CHOICES = [
-        (1, 'GOLD 1 - Mild'),
-        (2, 'GOLD 2 - Moderate'),
-        (3, 'GOLD 3 - Severe'),
-        (4, 'GOLD 4 - Very Severe'),
-    ]
-    patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='gold_classifications')
-    gold_stage = models.IntegerField(choices=GOLD_CHOICES)
+    patient_id = models.IntegerField()
+    gold_stage = models.CharField(max_length=20)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -57,9 +51,9 @@ class GoldClassification(models.Model):
 
 
 class SpirometryData(models.Model):
-    patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='spirometry_data')
-    fev1 = models.FloatField(help_text="FEV1 in litres")
-    fev1_fvc = models.FloatField(help_text="FEV1/FVC ratio (%)")
+    patient_id = models.IntegerField()
+    fev1_percent = models.FloatField()
+    fev1_fvc_ratio = models.FloatField()
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -67,14 +61,9 @@ class SpirometryData(models.Model):
 
 
 class GasExchangeHistory(models.Model):
-    HYPOXEMIA_CHOICES = [
-        ('yes', 'Yes'),
-        ('no', 'No'),
-        ('unknown', 'Unknown'),
-    ]
-    patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='gas_exchange_history')
-    has_hypoxemia = models.CharField(max_length=10, choices=HYPOXEMIA_CHOICES, default='unknown')
-    on_oxygen_therapy = models.BooleanField(default=False)
+    patient_id = models.IntegerField()
+    chronic_hypoxemia = models.CharField(max_length=20)
+    home_oxygen_use = models.CharField(max_length=10)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -82,17 +71,10 @@ class GasExchangeHistory(models.Model):
 
 
 class CurrentSymptoms(models.Model):
-    MMRC_CHOICES = [
-        (0, 'Grade 0'),
-        (1, 'Grade 1'),
-        (2, 'Grade 2'),
-        (3, 'Grade 3'),
-        (4, 'Grade 4'),
-    ]
-    patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='symptoms')
-    mmrc_grade = models.IntegerField(choices=MMRC_CHOICES)
-    cough = models.BooleanField(default=False)
-    sputum = models.BooleanField(default=False)
+    patient_id = models.IntegerField()
+    mmrc_score = models.IntegerField()
+    increased_cough = models.BooleanField(default=False)
+    increased_sputum = models.BooleanField(default=False)
     wheezing = models.BooleanField(default=False)
     fever = models.BooleanField(default=False)
     chest_tightness = models.BooleanField(default=False)
@@ -103,25 +85,25 @@ class CurrentSymptoms(models.Model):
 
 
 class Vitals(models.Model):
-    patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='vitals')
-    spo2 = models.FloatField(help_text="SpO2 (%)")
-    resp_rate = models.IntegerField(help_text="Respiratory rate (breaths/min)")
-    heart_rate = models.IntegerField(help_text="Heart rate (bpm)")
-    temperature = models.FloatField(help_text="Temperature (°C)")
-    bp = models.CharField(max_length=20, help_text="Blood pressure e.g. 120/80")
+    patient_id = models.IntegerField()
+    spo2 = models.IntegerField()
+    respiratory_rate = models.IntegerField()
+    heart_rate = models.IntegerField()
+    temperature = models.FloatField()
+    blood_pressure = models.CharField(max_length=10)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'vitals'
 
 
-class ABGEntry(models.Model):
-    patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='abg_entries')
-    ph = models.FloatField(help_text="pH (7.35–7.45 normal)")
-    pao2 = models.FloatField(help_text="PaO2 in mmHg")
-    paco2 = models.FloatField(help_text="PaCO2 in mmHg")
-    hco3 = models.FloatField(help_text="HCO3 in mEq/L")
-    fio2 = models.FloatField(help_text="FiO2 fraction (0.21–1.0)")
+class AbgEntry(models.Model):
+    patient_id = models.IntegerField()
+    ph = models.FloatField()
+    pao2 = models.FloatField()
+    paco2 = models.FloatField()
+    hco3 = models.FloatField()
+    fio2 = models.FloatField()
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
