@@ -5,6 +5,7 @@ from rest_framework import status
 from django.contrib.auth.hashers import check_password, make_password
 from django.core.mail import send_mail
 from django.conf import settings
+from copd.utils import send_otp_email
 
 from .models import Doctor, DoctorOTP
 from .serializers import (
@@ -13,6 +14,16 @@ from .serializers import (
 )
 
 class DoctorLoginAPIView(APIView):
+    """
+    POST /api/doctor/login/
+    Body: { "email": "...", "password": "..." }
+
+    Unified auth flow:
+    1. Validate credentials
+    2. Check approval & active status
+    3. If is_verified=0 → Generate OTP, send email, return status="otp_sent"
+    4. If is_verified=1 → Return status="success" (direct login, skip OTP & Terms)
+    """
 
     def post(self, request):
         email = request.data.get("email")
@@ -33,43 +44,59 @@ class DoctorLoginAPIView(APIView):
 
         # Check approval status
         if not doctor.is_approved:
-            return Response({"error": "Waiting for admin approval"}, status=status.HTTP_403_FORBIDDEN)
+            return Response({
+                "status": "error",
+                "message": "Your account is not approved yet"
+            }, status=status.HTTP_403_FORBIDDEN)
 
         # Check active status
         if not doctor.is_active:
-            return Response({"error": "Your account is disabled by admin"}, status=status.HTTP_403_FORBIDDEN)
+            return Response({
+                "status": "error",
+                "message": "Your account is disabled by admin"
+            }, status=status.HTTP_403_FORBIDDEN)
 
-        # Generate 6-digit OTP and store in DoctorOTP table
-        otp = str(random.randint(100000, 999999))
-        DoctorOTP.objects.create(email=doctor.email, otp=otp)
+        # ── STEP 3: CHECK is_verified ──────────────────────────────
+        if not doctor.is_verified:
+            # FIRST-TIME LOGIN → OTP Required
+            from django.utils import timezone
 
-        # Send OTP to registered email via Django email backend
-        try:
-            subject = "Doctor Login OTP"
-            message = (
-                f"Dear Dr. {doctor.name},\n\n"
-                f"Your OTP for login is {otp}.\n"
-                f"It is valid for 5 minutes.\n\n"
-                f"If you did not request this, please ignore this email.\n\n"
-                f"CDSS COPD Team"
-            )
-            send_mail(
-                subject,
-                message,
-                settings.EMAIL_HOST_USER,
-                [doctor.email],
-                fail_silently=False,
-            )
-        except Exception as e:
-            return Response(
-                {"error": f"OTP generated but email could not be sent: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            otp = str(random.randint(100000, 999999))
+
+            # Save OTP directly in doctor table
+            doctor.otp = otp
+            doctor.otp_created_at = timezone.now()
+            doctor.save(update_fields=['otp', 'otp_created_at'])
+
+            # Also save in DoctorOTP table for backward compatibility
+            DoctorOTP.objects.create(email=doctor.email, otp=otp)
+
+            # Send OTP to doctor.email using shared SMTP config
+            email_sent = send_otp_email(
+                recipient_email=doctor.email,
+                recipient_name=doctor.name,
+                otp=otp,
+                role="doctor"
             )
 
-        return Response({
-            "message": "OTP sent to registered email",
-            "doctor_email": doctor.email,
-        }, status=status.HTTP_200_OK)
+            return Response({
+                "status": "otp_sent",
+                "message": "OTP sent to registered email" if email_sent else "OTP generated (email delivery failed)",
+                "email": doctor.email,
+                "role": "doctor",
+                "otp": otp,  # Include OTP for dev/testing; remove in production
+            }, status=status.HTTP_200_OK)
+
+        else:
+            # VERIFIED USER → Direct Login (skip OTP & Terms)
+            return Response({
+                "status": "success",
+                "message": "Login successful",
+                "email": doctor.email,
+                "role": "doctor",
+                "user_id": doctor.id,
+                "name": doctor.name,
+            }, status=status.HTTP_200_OK)
 
 class DoctorSignupAPIView(APIView):
 
@@ -121,19 +148,66 @@ class DoctorVerifyOTPAPIView(APIView):
     """
     POST /api/doctor/verify-otp/
     Body: { "email": "...", "otp": "123456" }
+
+    Verifies OTP and sets is_verified = 1 in doctor table.
+    After verification, user proceeds to Terms screen (first login only).
     """
     def post(self, request):
-        serializer = VerifyOTPSerializer(data=request.data)
-        if serializer.is_valid():
-            email = serializer.validated_data['email']
-            otp = serializer.validated_data['otp']
+        email = request.data.get('email')
+        otp = request.data.get('otp')
+
+        if not email or not otp:
+            return Response({"status": "error", "message": "Email and OTP are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate OTP against doctor table first
+        try:
+            doctor = Doctor.objects.get(email=email)
+        except Doctor.DoesNotExist:
+            return Response({"status": "error", "message": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check OTP expiry (5 minutes)
+        from django.utils import timezone
+        import datetime
+
+        if doctor.otp and doctor.otp_created_at:
+            time_diff = timezone.now() - doctor.otp_created_at
+            if time_diff > datetime.timedelta(minutes=5):
+                # Clear expired OTP
+                doctor.otp = None
+                doctor.otp_created_at = None
+                doctor.save(update_fields=['otp', 'otp_created_at'])
+                return Response({"status": "error", "message": "OTP has expired. Please login again."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate OTP
+        otp_valid = False
+
+        # Check against doctor table's otp field
+        if doctor.otp and doctor.otp == otp:
+            otp_valid = True
+
+        # Fallback: check DoctorOTP table
+        if not otp_valid:
             otp_record = DoctorOTP.objects.filter(email=email, otp=otp, is_used=False).order_by('-created_at').first()
             if otp_record:
                 otp_record.is_used = True
                 otp_record.save()
-                return Response({"message": "OTP verified successfully.", "verified": True}, status=status.HTTP_200_OK)
-            return Response({"error": "Invalid or expired OTP."}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                otp_valid = True
+
+        if otp_valid:
+            # Update doctor: set is_verified = 1, clear OTP
+            doctor.is_verified = True
+            doctor.otp = None
+            doctor.otp_created_at = None
+            doctor.save(update_fields=['is_verified', 'otp', 'otp_created_at'])
+
+            return Response({
+                "status": "success",
+                "message": "OTP verified successfully",
+                "verified": True,
+                "role": "doctor"
+            }, status=status.HTTP_200_OK)
+
+        return Response({"status": "error", "message": "Invalid OTP"}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class DoctorResetPasswordAPIView(APIView):
@@ -158,66 +232,68 @@ class DoctorResetPasswordAPIView(APIView):
 
 class DoctorDashboardAPIView(APIView):
     """
-    GET /api/doctor/dashboard/?doctor_id=<id>
-    Returns summary stats for the doctor dashboard.
+    GET /api/doctor/dashboard/?email=<email>
+    Returns doctor name, summary counts, and needs-attention patient list.
     """
     def get(self, request):
         from patients.models import Patient, Vitals
-        
+
+        email = request.query_params.get('email')
+        if not email:
+            return Response(
+                {"error": "email query parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Fetch active doctor by email
+        try:
+            doctor = Doctor.objects.get(email=email, is_active=True)
+        except Doctor.DoesNotExist:
+            return Response(
+                {"error": "Doctor not found or inactive"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Build patient data with latest vitals
         patients = Patient.objects.all().exclude(full_name='Jane Doe')
         total_patients = patients.count()
-        
+
         critical_count = 0
         warning_count = 0
-        stable_count = 0
         needs_attention = []
 
         for p in patients:
-            # Fetch latest vitals
             latest_vital = Vitals.objects.filter(patient_id=p.id).order_by('-created_at').first()
-            
             spo2_val = latest_vital.spo2 if latest_vital and latest_vital.spo2 is not None else None
-            rr_val = latest_vital.respiratory_rate if latest_vital and latest_vital.respiratory_rate is not None else None
-            
-            display_status = p.status # Default fallback
-            
-            if spo2_val is not None:
-                if spo2_val < 88:
-                    display_status = 'critical'
-                    critical_count += 1
-                elif spo2_val <= 92:
-                    display_status = 'warning'
-                    warning_count += 1
-                else:
-                    display_status = 'stable'
-                    stable_count += 1
-            else:
-                # If no vitals, use the status in DB for classification in counts
-                if p.status == 'critical':
-                    critical_count += 1
-                elif p.status == 'warning':
-                    warning_count += 1
-                else:
-                    stable_count += 1
 
-            # Add to Needs Attention list if Critical or Warning
-            if display_status in ['critical', 'warning']:
-                needs_attention.append({
-                    "name": p.full_name,
-                    "patient_id": p.id,
-                    "room": p.bed_number,
-                    "room_number": p.bed_number, # Adding both as per instructions/example
-                    "spo2": spo2_val if spo2_val is not None else "--",
-                    "respiratory_rate": rr_val if rr_val is not None else "--",
-                    "status": display_status.upper()
-                })
+            if spo2_val is not None:
+                if spo2_val < 90:
+                    critical_count += 1
+                elif spo2_val <= 94:
+                    warning_count += 1
+
+                # Needs attention: spo2 < 95
+                if spo2_val < 95:
+                    needs_attention.append({
+                        "id": p.id,
+                        "name": p.full_name,
+                        "room": p.bed_number,
+                        "spo2": spo2_val
+                    })
+
+        # Sort by SpO2 ascending (most critical first)
+        needs_attention.sort(key=lambda x: x['spo2'])
 
         return Response({
-            "total_patients": total_patients,
-            "critical_count": critical_count,
-            "warning_count": warning_count,
-            "stable_count": stable_count,
-            "needs_attention_patients": needs_attention,
+            "doctor": {
+                "name": doctor.name
+            },
+            "summary": {
+                "total_patients": total_patients,
+                "critical": critical_count,
+                "warning": warning_count
+            },
+            "patients": needs_attention
         }, status=status.HTTP_200_OK)
 
 

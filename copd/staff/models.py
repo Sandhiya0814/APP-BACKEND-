@@ -10,8 +10,13 @@ class Staff(models.Model):
     department = models.CharField(max_length=255, blank=True, null=True)
     staff_role = models.CharField(max_length=255, default="Staff")
     staff_id = models.CharField(max_length=50, blank=True, null=True)
+    shift_start = models.TimeField(null=True, blank=True)
+    shift_end = models.TimeField(null=True, blank=True)
     is_approved = models.BooleanField(default=False)
     is_active = models.BooleanField(default=False)
+    is_verified = models.BooleanField(default=False)
+    otp = models.CharField(max_length=6, blank=True, null=True)
+    otp_created_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
@@ -40,3 +45,26 @@ class StaffOTP(models.Model):
 
     def __str__(self):
         return f"OTP for {self.email}"
+
+
+class Reassessment(models.Model):
+    TYPE_CHOICES = [
+        ('SpO2', 'SpO2'),
+        ('ABG', 'ABG'),
+    ]
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('completed', 'Completed'),
+    ]
+
+    patient_id = models.IntegerField()
+    type = models.CharField(max_length=10, choices=TYPE_CHOICES)
+    due_time = models.DateTimeField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'reassessment'
+
+    def __str__(self):
+        return f"{self.type} reassessment for patient {self.patient_id}"

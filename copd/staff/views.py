@@ -5,6 +5,7 @@ from rest_framework import status
 from django.contrib.auth.hashers import make_password
 from django.core.mail import send_mail
 from django.conf import settings
+from copd.utils import send_otp_email
 
 from .models import Staff, StaffOTP
 from .serializers import (
@@ -18,10 +19,11 @@ class StaffLoginAPIView(APIView):
     POST /api/staff/login/
     Body: { "email": "...", "password": "..." }
 
-    Fetches staff from sandhiya.staff table:
-        SELECT * FROM sandhiya.staff WHERE email = <email>;
-    Validates password, checks is_approved + is_active,
-    generates OTP and sends it to the staff's registered email.
+    Unified auth flow:
+    1. Validate credentials
+    2. Check approval & active status
+    3. If is_verified=0 → Generate OTP, send email, return status="otp_sent"
+    4. If is_verified=1 → Return status="success" (direct login, skip OTP & Terms)
     """
     def post(self, request):
         email = request.data.get("email")
@@ -51,49 +53,59 @@ class StaffLoginAPIView(APIView):
 
         # Check admin approval
         if not staff.is_approved:
-            return Response(
-                {"error": "Waiting for admin approval"},
-                status=status.HTTP_403_FORBIDDEN
-            )
+            return Response({
+                "status": "error",
+                "message": "Your account is not approved yet"
+            }, status=status.HTTP_403_FORBIDDEN)
 
         # Check active status (admin may disable account after approval)
         if not staff.is_active:
-            return Response(
-                {"error": "Your account is disabled by admin"},
-                status=status.HTTP_403_FORBIDDEN
+            return Response({
+                "status": "error",
+                "message": "Your account is disabled by admin"
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        # ── STEP 3: CHECK is_verified ──────────────────────────────
+        if not staff.is_verified:
+            # FIRST-TIME LOGIN → OTP Required
+            from django.utils import timezone
+
+            otp = str(random.randint(100000, 999999))
+
+            # Save OTP directly in staff table
+            staff.otp = otp
+            staff.otp_created_at = timezone.now()
+            staff.save(update_fields=['otp', 'otp_created_at'])
+
+            # Also save in StaffOTP table for backward compatibility
+            StaffOTP.objects.create(email=staff.email, otp=otp)
+
+            # Send OTP to staff.email using shared SMTP config
+            email_sent = send_otp_email(
+                recipient_email=staff.email,
+                recipient_name=staff.name,
+                otp=otp,
+                role="staff"
             )
 
-        # Generate 6-digit OTP and store in StaffOTP table
-        otp = str(random.randint(100000, 999999))
-        StaffOTP.objects.create(email=staff.email, otp=otp)
+            return Response({
+                "status": "otp_sent",
+                "message": "OTP sent to registered email" if email_sent else "OTP generated (email delivery failed)",
+                "email": staff.email,
+                "role": "staff",
+                "otp": otp,  # Include OTP for dev/testing; remove in production
+            }, status=status.HTTP_200_OK)
 
-        # Send OTP to the staff's registered email
-        try:
-            subject = "Staff Login OTP"
-            message = (
-                f"Dear {staff.name},\n\n"
-                f"Your OTP for login is {otp}.\n"
-                f"It will expire in 5 minutes.\n\n"
-                f"If you did not request this, please ignore this email.\n\n"
-                f"CDSS COPD Team"
-            )
-            send_mail(
-                subject,
-                message,
-                settings.EMAIL_HOST_USER,
-                [staff.email],
-                fail_silently=False,
-            )
-        except Exception as e:
-            return Response(
-                {"error": f"OTP generated but email could not be sent: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-        return Response({
-            "message": "Login successful. OTP sent to email",
-            "staff_email": staff.email,
-        }, status=status.HTTP_200_OK)
+        else:
+            # VERIFIED USER → Direct Login (skip OTP & Terms)
+            return Response({
+                "status": "success",
+                "message": "Login successful",
+                "email": staff.email,
+                "role": "staff",
+                "user_id": staff.id,
+                "name": staff.name,
+            }, status=status.HTTP_200_OK)
 
 class StaffSignupAPIView(APIView):
 
@@ -150,19 +162,66 @@ class StaffVerifyOTPAPIView(APIView):
     """
     POST /api/staff/verify-otp/
     Body: { "email": "...", "otp": "123456" }
+
+    Verifies OTP and sets is_verified = 1 in staff table.
+    After verification, user proceeds to Terms screen (first login only).
     """
     def post(self, request):
-        serializer = StaffVerifyOTPSerializer(data=request.data)
-        if serializer.is_valid():
-            email = serializer.validated_data['email']
-            otp = serializer.validated_data['otp']
+        email = request.data.get('email')
+        otp = request.data.get('otp')
+
+        if not email or not otp:
+            return Response({"status": "error", "message": "Email and OTP are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate OTP against staff table first
+        try:
+            staff = Staff.objects.get(email=email)
+        except Staff.DoesNotExist:
+            return Response({"status": "error", "message": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check OTP expiry (5 minutes)
+        from django.utils import timezone
+        import datetime
+
+        if staff.otp and staff.otp_created_at:
+            time_diff = timezone.now() - staff.otp_created_at
+            if time_diff > datetime.timedelta(minutes=5):
+                # Clear expired OTP
+                staff.otp = None
+                staff.otp_created_at = None
+                staff.save(update_fields=['otp', 'otp_created_at'])
+                return Response({"status": "error", "message": "OTP has expired. Please login again."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate OTP
+        otp_valid = False
+
+        # Check against staff table's otp field
+        if staff.otp and staff.otp == otp:
+            otp_valid = True
+
+        # Fallback: check StaffOTP table
+        if not otp_valid:
             otp_record = StaffOTP.objects.filter(email=email, otp=otp, is_used=False).order_by('-created_at').first()
             if otp_record:
                 otp_record.is_used = True
                 otp_record.save()
-                return Response({"message": "OTP verified successfully.", "verified": True}, status=status.HTTP_200_OK)
-            return Response({"error": "Invalid or expired OTP."}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                otp_valid = True
+
+        if otp_valid:
+            # Update staff: set is_verified = 1, clear OTP
+            staff.is_verified = True
+            staff.otp = None
+            staff.otp_created_at = None
+            staff.save(update_fields=['is_verified', 'otp', 'otp_created_at'])
+
+            return Response({
+                "status": "success",
+                "message": "OTP verified successfully",
+                "verified": True,
+                "role": "staff"
+            }, status=status.HTTP_200_OK)
+
+        return Response({"status": "error", "message": "Invalid OTP"}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class StaffResetPasswordAPIView(APIView):
@@ -187,23 +246,67 @@ class StaffResetPasswordAPIView(APIView):
 
 class StaffDashboardAPIView(APIView):
     """
-    GET /api/staff/dashboard/?staff_id=<id>
+    GET /api/staff/dashboard/?email=<email>
+    Returns staff info + pending reassessments from database.
     """
     def get(self, request):
         from patients.models import Patient
-        total = Patient.objects.count()
-        critical = Patient.objects.filter(status='critical').count()
-        warning = Patient.objects.filter(status='warning').count()
-        stable = Patient.objects.filter(status='stable').count()
-        recent_patients = Patient.objects.all().exclude(full_name='Jane Doe').order_by('-created_at')[:5].values(
-            'id', 'full_name', 'ward', 'bed_number', 'status', 'created_at'
-        )
+        from .models import Reassessment
+        from django.utils import timezone
+
+        email = request.query_params.get('email')
+        if not email:
+            return Response(
+                {"error": "email query parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Fetch logged-in staff details
+        try:
+            staff = Staff.objects.get(email=email)
+        except Staff.DoesNotExist:
+            return Response(
+                {"error": "Staff not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Build staff info (name only)
+        staff_info = {
+            "name": staff.name
+        }
+
+        # Fetch pending reassessments joined with patient
+        now = timezone.now()
+        pending_reassessments = Reassessment.objects.filter(
+            status='pending'
+        ).order_by('due_time')
+
+        reassessment_list = []
+        for r in pending_reassessments:
+            # Get patient details
+            try:
+                patient = Patient.objects.get(id=r.patient_id)
+            except Patient.DoesNotExist:
+                continue
+
+            # Calculate due_in in minutes (negative = overdue)
+            diff = r.due_time - now
+            due_in = int(diff.total_seconds() / 60)
+
+            reassessment_list.append({
+                "id": r.id,
+                "type": r.type,
+                "patient_name": patient.full_name,
+                "bed_number": patient.bed_number,
+                "due_in": due_in
+            })
+
+        pending_count = Reassessment.objects.filter(status='pending').count()
+
         return Response({
-            "total_patients": total,
-            "critical_patients": critical,
-            "warning_patients": warning,
-            "stable_patients": stable,
-            "recent_patients": list(recent_patients),
+            "staff": staff_info,
+            "reassessments": reassessment_list,
+            "pending_count": pending_count
         }, status=status.HTTP_200_OK)
 
 

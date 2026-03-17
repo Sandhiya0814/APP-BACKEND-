@@ -100,10 +100,14 @@ REST_FRAMEWORK = {
 }
 
 # ─── Email Configuration (Gmail SMTP) ───────────────────────────────────────
+# SINGLE shared config for BOTH Doctor and Staff OTP emails.
+# Sender: EMAIL_HOST_USER (configured once below)
+# Recipient: doctor.email or staff.email (fetched dynamically from sandhiya DB)
+# ─────────────────────────────────────────────────────────────────────────────
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = 'sandhiyassenthil1408@gmail.com'       # ← replace with your Gmail
-EMAIL_HOST_PASSWORD = 'bism xbtc xome glmg' # ← replace with Gmail App Password
+EMAIL_HOST_USER = 'sandhiyassenthil1408@gmail.com'
+EMAIL_HOST_PASSWORD = 'etan dyaf aeuj lzdg'       # Gmail App Password
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
