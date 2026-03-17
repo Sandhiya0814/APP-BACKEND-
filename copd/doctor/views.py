@@ -88,15 +88,25 @@ class DoctorLoginAPIView(APIView):
             }, status=status.HTTP_200_OK)
 
         else:
-            # VERIFIED USER → Direct Login (skip OTP & Terms)
-            return Response({
-                "status": "success",
-                "message": "Login successful",
-                "email": doctor.email,
-                "role": "doctor",
-                "user_id": doctor.id,
-                "name": doctor.name,
-            }, status=status.HTTP_200_OK)
+            # VERIFIED USER → check terms_accepted
+            if not doctor.terms_accepted:
+                # Terms not yet accepted → show Terms screen
+                return Response({
+                    "status": "terms_required",
+                    "message": "Please accept Terms & Conditions",
+                    "email": doctor.email,
+                    "role": "doctor",
+                }, status=status.HTTP_200_OK)
+            else:
+                # FULLY VERIFIED → Direct Dashboard (skip OTP & Terms)
+                return Response({
+                    "status": "success",
+                    "message": "Login successful",
+                    "email": doctor.email,
+                    "role": "doctor",
+                    "user_id": doctor.id,
+                    "name": doctor.name,
+                }, status=status.HTTP_200_OK)
 
 class DoctorSignupAPIView(APIView):
 
@@ -200,12 +210,23 @@ class DoctorVerifyOTPAPIView(APIView):
             doctor.otp_created_at = None
             doctor.save(update_fields=['is_verified', 'otp', 'otp_created_at'])
 
-            return Response({
-                "status": "success",
-                "message": "OTP verified successfully",
-                "verified": True,
-                "role": "doctor"
-            }, status=status.HTTP_200_OK)
+            # Check if terms are accepted
+            if not doctor.terms_accepted:
+                return Response({
+                    "status": "terms_required",
+                    "message": "OTP verified. Please accept Terms & Conditions",
+                    "verified": True,
+                    "role": "doctor",
+                    "email": doctor.email,
+                }, status=status.HTTP_200_OK)
+            else:
+                return Response({
+                    "status": "success",
+                    "message": "Login successful",
+                    "verified": True,
+                    "role": "doctor",
+                    "email": doctor.email,
+                }, status=status.HTTP_200_OK)
 
         return Response({"status": "error", "message": "Invalid OTP"}, status=status.HTTP_400_BAD_REQUEST)
 

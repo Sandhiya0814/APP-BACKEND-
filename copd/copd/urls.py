@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.urls import path
 
 # Splash
-from copd.views import SplashAPIView, RegisterAPIView, UnifiedLoginAPIView
+from copd.views import SplashAPIView, RegisterAPIView, UnifiedLoginAPIView, AcceptTermsAPIView
 
 # Doctor
 from doctor.views import *
@@ -62,6 +62,7 @@ urlpatterns = [
     path('api/splash/', SplashAPIView.as_view(), name='splash'),
     path('api/register/', RegisterAPIView.as_view(), name='register'),
     path('api/login/', UnifiedLoginAPIView.as_view(), name='unified-login'),
+    path('api/accept-terms/', AcceptTermsAPIView.as_view(), name='accept-terms'),
 
     # ──────────────────────────────────────────────────
     # Doctor Auth

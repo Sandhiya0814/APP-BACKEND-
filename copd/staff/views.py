@@ -97,15 +97,25 @@ class StaffLoginAPIView(APIView):
             }, status=status.HTTP_200_OK)
 
         else:
-            # VERIFIED USER → Direct Login (skip OTP & Terms)
-            return Response({
-                "status": "success",
-                "message": "Login successful",
-                "email": staff.email,
-                "role": "staff",
-                "user_id": staff.id,
-                "name": staff.name,
-            }, status=status.HTTP_200_OK)
+            # VERIFIED USER → check terms_accepted
+            if not staff.terms_accepted:
+                # Terms not yet accepted → show Terms screen
+                return Response({
+                    "status": "terms_required",
+                    "message": "Please accept Terms & Conditions",
+                    "email": staff.email,
+                    "role": "staff",
+                }, status=status.HTTP_200_OK)
+            else:
+                # FULLY VERIFIED → Direct Dashboard (skip OTP & Terms)
+                return Response({
+                    "status": "success",
+                    "message": "Login successful",
+                    "email": staff.email,
+                    "role": "staff",
+                    "user_id": staff.id,
+                    "name": staff.name,
+                }, status=status.HTTP_200_OK)
 
 class StaffSignupAPIView(APIView):
 
@@ -214,12 +224,23 @@ class StaffVerifyOTPAPIView(APIView):
             staff.otp_created_at = None
             staff.save(update_fields=['is_verified', 'otp', 'otp_created_at'])
 
-            return Response({
-                "status": "success",
-                "message": "OTP verified successfully",
-                "verified": True,
-                "role": "staff"
-            }, status=status.HTTP_200_OK)
+            # Check if terms are accepted
+            if not staff.terms_accepted:
+                return Response({
+                    "status": "terms_required",
+                    "message": "OTP verified. Please accept Terms & Conditions",
+                    "verified": True,
+                    "role": "staff",
+                    "email": staff.email,
+                }, status=status.HTTP_200_OK)
+            else:
+                return Response({
+                    "status": "success",
+                    "message": "Login successful",
+                    "verified": True,
+                    "role": "staff",
+                    "email": staff.email,
+                }, status=status.HTTP_200_OK)
 
         return Response({"status": "error", "message": "Invalid OTP"}, status=status.HTTP_400_BAD_REQUEST)
 

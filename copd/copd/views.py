@@ -176,12 +176,66 @@ class UnifiedLoginAPIView(APIView):
             }, status=status.HTTP_200_OK)
 
         else:
-            # VERIFIED USER → Direct Login
-            return Response({
-                "status": "success",
-                "message": "Login successful",
-                "email": user.email,
-                "role": role,
-                "user_id": user.id,
-                "name": user.name,
-            }, status=status.HTTP_200_OK)
+            # VERIFIED USER → check terms_accepted
+            if not user.terms_accepted:
+                return Response({
+                    "status": "terms_required",
+                    "message": "Please accept Terms & Conditions",
+                    "email": user.email,
+                    "role": role,
+                }, status=status.HTTP_200_OK)
+            else:
+                # FULLY VERIFIED → Direct Dashboard
+                return Response({
+                    "status": "success",
+                    "message": "Login successful",
+                    "email": user.email,
+                    "role": role,
+                    "user_id": user.id,
+                    "name": user.name,
+                }, status=status.HTTP_200_OK)
+
+
+class AcceptTermsAPIView(APIView):
+    """
+    POST /api/accept-terms/
+    Body: { "email": "...", "role": "doctor" or "staff" }
+
+    Updates terms_accepted = 1 in the respective table.
+    Called when user clicks "Accept" on Terms & Conditions screen.
+    """
+    def post(self, request):
+        email = request.data.get("email")
+        role = request.data.get("role", "").lower()
+
+        if not email or not role:
+            return Response({"status": "error", "message": "Email and role are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if role not in ["doctor", "staff"]:
+            return Response({"status": "error", "message": "Role must be 'doctor' or 'staff'"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if role == "doctor":
+            from doctor.models import Doctor
+            try:
+                user = Doctor.objects.get(email=email)
+            except Doctor.DoesNotExist:
+                return Response({"status": "error", "message": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            from staff.models import Staff
+            try:
+                user = Staff.objects.get(email=email)
+            except Staff.DoesNotExist:
+                return Response({"status": "error", "message": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # UPDATE table SET terms_accepted = 1 WHERE email = user_email
+        user.terms_accepted = True
+        user.save(update_fields=['terms_accepted'])
+
+        return Response({
+            "status": "success",
+            "message": "Terms accepted successfully",
+            "role": role,
+            "email": user.email,
+            "user_id": user.id,
+            "name": user.name,
+        }, status=status.HTTP_200_OK)
