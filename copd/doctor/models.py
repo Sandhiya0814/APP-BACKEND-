@@ -17,6 +17,8 @@ class Doctor(models.Model):
     otp = models.CharField(max_length=6, blank=True, null=True)
     otp_created_at = models.DateTimeField(blank=True, null=True)
     terms_accepted = models.BooleanField(default=False)
+    reset_token = models.CharField(max_length=64, blank=True, null=True)
+    token_created_at = models.DateTimeField(blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
 

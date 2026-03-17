@@ -239,3 +239,178 @@ class AcceptTermsAPIView(APIView):
             "user_id": user.id,
             "name": user.name,
         }, status=status.HTTP_200_OK)
+
+
+class ForgotPasswordAPIView(APIView):
+    """
+    POST /api/forgot-password/
+    Body: { "email": "...", "role": "doctor" or "staff" }
+
+    Generates 6-digit OTP, saves in DB, sends OTP to email.
+    OTP expires in 5 minutes.
+    """
+    def post(self, request):
+        import random
+        from django.utils import timezone
+        from django.core.mail import send_mail
+        from django.conf import settings as django_settings
+
+        email = request.data.get("email")
+        role = request.data.get("role", "").lower()
+
+        if not email:
+            return Response({"status": "error", "message": "Email is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if role not in ["doctor", "staff"]:
+            return Response({"status": "error", "message": "Role must be 'doctor' or 'staff'"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if user exists
+        if role == "doctor":
+            from doctor.models import Doctor
+            try:
+                user = Doctor.objects.get(email=email)
+            except Doctor.DoesNotExist:
+                return Response({"status": "error", "message": "Email not registered"}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            from staff.models import Staff
+            try:
+                user = Staff.objects.get(email=email)
+            except Staff.DoesNotExist:
+                return Response({"status": "error", "message": "Email not registered"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Generate 6-digit OTP
+        otp = str(random.randint(100000, 999999))
+
+        # Save OTP in DB
+        user.otp = otp
+        user.otp_created_at = timezone.now()
+        user.save(update_fields=['otp', 'otp_created_at'])
+
+        # Send OTP email
+        email_sent = False
+        try:
+            title = f"Dr. {user.name}" if role == "doctor" else user.name
+            send_mail(
+                "Password Reset OTP",
+                (
+                    f"Dear {title},\n\n"
+                    f"Your OTP for password reset is: {otp}. It is valid for 5 minutes.\n\n"
+                    f"If you did not request this, please ignore this email.\n\n"
+                    f"CDSS COPD Team"
+                ),
+                django_settings.EMAIL_HOST_USER,
+                [user.email],
+                fail_silently=False,
+            )
+            email_sent = True
+        except Exception as e:
+            print(f"[ForgotPassword] Email send failed: {e}")
+
+        return Response({
+            "status": "otp_sent",
+            "message": "OTP sent to your email" if email_sent else "OTP generated (email delivery failed)",
+            "otp": otp,  # Dev/testing only; remove in production
+        }, status=status.HTTP_200_OK)
+
+
+class ForgotPasswordVerifyOTPAPIView(APIView):
+    """
+    POST /api/forgot-password/verify-otp/
+    Body: { "email": "...", "otp": "123456", "role": "doctor" or "staff" }
+
+    Validates OTP against DB, checks 5-minute expiry.
+    Returns "otp_verified" on success.
+    """
+    def post(self, request):
+        from django.utils import timezone
+        from datetime import timedelta
+
+        email = request.data.get("email")
+        otp = request.data.get("otp")
+        role = request.data.get("role", "").lower()
+
+        if not email or not otp:
+            return Response({"status": "error", "message": "Email and OTP are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if role not in ["doctor", "staff"]:
+            return Response({"status": "error", "message": "Role must be 'doctor' or 'staff'"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Fetch user
+        if role == "doctor":
+            from doctor.models import Doctor
+            try:
+                user = Doctor.objects.get(email=email)
+            except Doctor.DoesNotExist:
+                return Response({"status": "error", "message": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            from staff.models import Staff
+            try:
+                user = Staff.objects.get(email=email)
+            except Staff.DoesNotExist:
+                return Response({"status": "error", "message": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check if OTP matches
+        if user.otp and user.otp == otp:
+            # Check expiry (5 minutes)
+            if user.otp_created_at:
+                expiry_time = user.otp_created_at + timedelta(minutes=5)
+                if timezone.now() > expiry_time:
+                    # OTP expired → clear it
+                    user.otp = None
+                    user.otp_created_at = None
+                    user.save(update_fields=['otp', 'otp_created_at'])
+                    return Response({"status": "error", "message": "OTP expired"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # OTP valid
+            return Response({
+                "status": "otp_verified",
+                "message": "OTP verified successfully",
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({"status": "error", "message": "Invalid OTP"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ResetPasswordAPIView(APIView):
+    """
+    POST /api/reset-password/
+    Body: { "email": "...", "new_password": "...", "role": "doctor" or "staff" }
+
+    Updates password securely and clears OTP.
+    """
+    def post(self, request):
+        from django.contrib.auth.hashers import make_password
+
+        email = request.data.get("email")
+        new_password = request.data.get("new_password")
+        role = request.data.get("role", "").lower()
+
+        if not email or not new_password:
+            return Response({"status": "error", "message": "Email and new password are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if role not in ["doctor", "staff"]:
+            return Response({"status": "error", "message": "Role must be 'doctor' or 'staff'"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Fetch user
+        if role == "doctor":
+            from doctor.models import Doctor
+            try:
+                user = Doctor.objects.get(email=email)
+            except Doctor.DoesNotExist:
+                return Response({"status": "error", "message": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            from staff.models import Staff
+            try:
+                user = Staff.objects.get(email=email)
+            except Staff.DoesNotExist:
+                return Response({"status": "error", "message": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Update password and clear OTP
+        user.password = make_password(new_password)
+        user.otp = None
+        user.otp_created_at = None
+        user.save(update_fields=['password', 'otp', 'otp_created_at'])
+
+        return Response({
+            "status": "success",
+            "message": "Password reset successful",
+        }, status=status.HTTP_200_OK)
