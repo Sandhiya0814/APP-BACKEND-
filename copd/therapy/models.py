@@ -14,13 +14,18 @@ class OxygenStatus(models.Model):
 
 
 class AIAnalysis(models.Model):
+    RISK_LEVEL_CHOICES = [
+        ('LOW', 'Low'),
+        ('MODERATE', 'Moderate'),
+        ('HIGH', 'High'),
+    ]
+
     patient_id = models.IntegerField()
-    risk_score = models.FloatField(default=50.0)
-    risk_level = models.CharField(max_length=20, default='moderate')
-    deterioration_probability = models.FloatField(default=0.5)
-    key_factors = models.TextField(default='')
-    recommendations = models.TextField(default='')
-    created_at = models.DateTimeField(auto_now_add=True)
+    risk_level = models.CharField(max_length=20, choices=RISK_LEVEL_CHOICES, default='LOW')
+    confidence_score = models.IntegerField(default=0)
+    acidosis = models.IntegerField(default=0)
+    hypercapnia = models.IntegerField(default=0)
+    recorded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'ai_analysis'
@@ -41,9 +46,11 @@ class ABGTrend(models.Model):
 
 class TrendAnalysis(models.Model):
     patient_id = models.IntegerField()
-    spo2_trend = models.TextField(default='')
-    vitals_trend = models.TextField(default='')
-    created_at = models.DateTimeField(auto_now_add=True)
+    overall_status = models.CharField(max_length=50, default='')
+    paco2_status = models.CharField(max_length=50, default='')
+    ph_status = models.CharField(max_length=50, default='')
+    spo2_status = models.CharField(max_length=50, default='')
+    recorded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'trend_analysis'
@@ -83,7 +90,10 @@ class DeviceSelection(models.Model):
 
 class ReviewRecommendation(models.Model):
     patient_id = models.IntegerField()
-    decision = models.CharField(max_length=20, default='accept')
+    device = models.CharField(max_length=100, default='')
+    fio2 = models.CharField(max_length=50, default='')
+    flow_rate = models.CharField(max_length=50, default='')
+    decision = models.CharField(max_length=20, default='accepted')
     override_reason = models.TextField(default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -93,11 +103,12 @@ class ReviewRecommendation(models.Model):
 
 class TherapyRecommendation(models.Model):
     patient_id = models.IntegerField()
-    therapy_type = models.CharField(max_length=100, default='Controlled Oxygen Therapy')
-    flow_rate = models.FloatField(default=2.0)
-    device = models.CharField(max_length=50, default='venturi')
-    duration = models.CharField(max_length=50, default='Continuous')
-    precautions = models.TextField(default='')
+    device = models.CharField(max_length=100, default='')
+    fio2 = models.CharField(max_length=50, default='')
+    flow_rate = models.CharField(max_length=50, default='')
+    target_spo2 = models.CharField(max_length=50, default='')
+    next_abg = models.CharField(max_length=50, default='')
+    rationale = models.TextField(default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -128,8 +139,9 @@ class EscalationCriteria(models.Model):
 
 class ScheduleReassessment(models.Model):
     patient_id = models.IntegerField()
-    interval = models.CharField(max_length=10, default='1h')
-    scheduled_at = models.DateTimeField()
+    reassessment_minutes = models.IntegerField(default=60)
+    due_time = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, default='pending')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -145,3 +157,41 @@ class UrgentAction(models.Model):
 
     class Meta:
         db_table = 'urgent_action'
+
+
+class RecommendationLog(models.Model):
+    patient_id = models.IntegerField()
+    recommended_device = models.CharField(max_length=100, default='')
+    fio2 = models.CharField(max_length=50, default='')
+    flow_rate = models.CharField(max_length=50, default='')
+    accepted = models.IntegerField(default=1)
+    override_reason = models.TextField(default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'recommendation_log'
+
+
+class TherapyPlan(models.Model):
+    patient_id = models.IntegerField()
+    device = models.CharField(max_length=100, default='')
+    fio2 = models.CharField(max_length=50, default='')
+    flow_rate = models.CharField(max_length=50, default='')
+    target_spo2 = models.CharField(max_length=50, default='')
+    next_abg_time = models.CharField(max_length=50, default='')
+    rationale = models.TextField(default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'therapy_plan'
+
+
+class ReassessmentSchedule(models.Model):
+    patient_id = models.IntegerField()
+    reassessment_time_minutes = models.IntegerField(default=60)
+    due_time = models.DateTimeField()
+    status = models.CharField(max_length=20, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'reassessment_schedule'

@@ -61,9 +61,14 @@ class Reassessment(models.Model):
     ]
 
     patient_id = models.IntegerField()
-    type = models.CharField(max_length=10, choices=TYPE_CHOICES)
-    due_time = models.DateTimeField()
+    type = models.CharField(max_length=10, choices=TYPE_CHOICES, default='SpO2')
+    due_time = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    spo2 = models.FloatField(null=True, blank=True)
+    respiratory_rate = models.FloatField(null=True, blank=True)
+    heart_rate = models.FloatField(null=True, blank=True)
+    notes = models.TextField(default='', blank=True)
+    reassessment_time = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

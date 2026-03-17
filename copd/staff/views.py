@@ -311,12 +311,16 @@ class StaffDashboardAPIView(APIView):
                 continue
 
             # Calculate due_in in minutes (negative = overdue)
-            diff = r.due_time - now
-            due_in = int(diff.total_seconds() / 60)
+            if r.due_time:
+                diff = r.due_time - now
+                due_in = int(diff.total_seconds() / 60)
+            else:
+                due_in = 0
 
             reassessment_list.append({
                 "id": r.id,
                 "type": r.type,
+                "patient_id": r.patient_id,
                 "patient_name": patient.full_name,
                 "bed_number": patient.bed_number,
                 "due_in": due_in
@@ -324,10 +328,38 @@ class StaffDashboardAPIView(APIView):
 
         pending_count = Reassessment.objects.filter(status='pending').count()
 
+        # Fetch latest completed reassessments (for dashboard display)
+        completed = Reassessment.objects.filter(
+            status='completed'
+        ).order_by('-reassessment_time')[:10]
+
+        latest_reassessments = []
+        for r in completed:
+            try:
+                patient = Patient.objects.get(id=r.patient_id)
+                p_name = patient.full_name
+                p_bed = patient.bed_number
+            except Patient.DoesNotExist:
+                p_name = "Unknown"
+                p_bed = "--"
+
+            latest_reassessments.append({
+                "id": r.id,
+                "patient_id": r.patient_id,
+                "patient_name": p_name,
+                "bed_number": p_bed,
+                "spo2": r.spo2,
+                "respiratory_rate": r.respiratory_rate,
+                "heart_rate": r.heart_rate,
+                "notes": r.notes,
+                "reassessment_time": r.reassessment_time.strftime("%Y-%m-%d %H:%M:%S") if r.reassessment_time else None,
+            })
+
         return Response({
             "staff": staff_info,
             "reassessments": reassessment_list,
-            "pending_count": pending_count
+            "pending_count": pending_count,
+            "latest_reassessments": latest_reassessments
         }, status=status.HTTP_200_OK)
 
 
@@ -455,3 +487,103 @@ class StaffUpdateAbgAPIView(APIView):
         abg.save()
         
         return Response({"message": "ABG updated successfully"}, status=status.HTTP_200_OK)
+
+
+class ReassessmentAPIView(APIView):
+    """
+    POST /api/reassessment/
+    Body: { patient_id, spo2, respiratory_rate, heart_rate, notes, reassessment_time }
+    Saves reassessment data into sandhiya.reassessment table.
+
+    GET /api/reassessment/?patient_id=<id>
+    Returns the latest completed reassessment for the given patient.
+    """
+    def post(self, request):
+        from .models import Reassessment
+
+        patient_id = request.data.get('patient_id')
+        spo2 = request.data.get('spo2')
+        respiratory_rate = request.data.get('respiratory_rate')
+        heart_rate = request.data.get('heart_rate')
+        notes = request.data.get('notes', '')
+        reassessment_time = request.data.get('reassessment_time')
+
+        # Validate required fields
+        if not patient_id:
+            return Response({"status": "error", "message": "patient_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        if spo2 is None:
+            return Response({"status": "error", "message": "spo2 is required"}, status=status.HTTP_400_BAD_REQUEST)
+        if respiratory_rate is None:
+            return Response({"status": "error", "message": "respiratory_rate is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        from django.utils import timezone
+        from datetime import datetime as dt
+
+        # Parse reassessment_time or use current time
+        if reassessment_time:
+            try:
+                parsed_time = dt.strptime(reassessment_time, "%Y-%m-%d %H:%M:%S")
+                from django.utils.timezone import make_aware
+                parsed_time = make_aware(parsed_time)
+            except (ValueError, TypeError):
+                parsed_time = timezone.now()
+        else:
+            parsed_time = timezone.now()
+
+        try:
+            patient_id_int = int(patient_id)
+        except (ValueError, TypeError):
+            return Response({"status": "error", "message": "Invalid patient_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+        Reassessment.objects.create(
+            patient_id=patient_id_int,
+            type='SpO2',
+            due_time=parsed_time,
+            status='completed',
+            spo2=float(spo2),
+            respiratory_rate=float(respiratory_rate),
+            heart_rate=float(heart_rate) if heart_rate else None,
+            notes=notes,
+            reassessment_time=parsed_time,
+        )
+
+        return Response({
+            "status": "success",
+            "message": "Reassessment saved successfully"
+        }, status=status.HTTP_201_CREATED)
+
+    def get(self, request):
+        from .models import Reassessment
+
+        patient_id = request.query_params.get('patient_id')
+        if not patient_id:
+            return Response({"status": "error", "message": "patient_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            patient_id_int = int(patient_id)
+        except (ValueError, TypeError):
+            return Response({"status": "error", "message": "Invalid patient_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+        latest = Reassessment.objects.filter(
+            patient_id=patient_id_int,
+            status='completed'
+        ).order_by('-reassessment_time').first()
+
+        if not latest:
+            return Response({
+                "status": "error",
+                "message": "No reassessment data found"
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        return Response({
+            "status": "success",
+            "data": {
+                "id": latest.id,
+                "patient_id": latest.patient_id,
+                "spo2": latest.spo2,
+                "respiratory_rate": latest.respiratory_rate,
+                "heart_rate": latest.heart_rate,
+                "notes": latest.notes,
+                "reassessment_time": latest.reassessment_time.strftime("%Y-%m-%d %H:%M:%S") if latest.reassessment_time else None,
+            }
+        }, status=status.HTTP_200_OK)

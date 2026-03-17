@@ -6,6 +6,7 @@ from .models import (
     Patient, BaselineDetails, GoldClassification, SpirometryData,
     GasExchangeHistory, CurrentSymptoms, Vitals, AbgEntry, ReassessmentChecklist
 )
+from therapy.models import TrendAnalysis
 from .serializers import (
     PatientSerializer, AddPatientSerializer,
     BaselineDetailsInputSerializer, GoldClassificationInputSerializer,
@@ -245,7 +246,196 @@ class PatientDetailsForDoctorAPIView(APIView):
 class AIRiskAPIView(APIView):
     """
     GET /api/patient/ai-risk/<patient_id>/
-    Calculates patient risk based on vitals and ABG data.
+    1. Fetches latest vitals and ABG for the patient
+    2. Calculates risk_level + confidence_score
+    3. Stores result in ai_analysis table
+    4. Calculates trend values and stores in trend_analysis table
+    5. Returns the computed data
+    """
+    def get(self, request, patient_id):
+        try:
+            patient = Patient.objects.get(id=patient_id)
+        except Patient.DoesNotExist:
+            return Response({"error": "Patient not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # ── 1. Fetch latest vitals ──
+        latest_vitals = Vitals.objects.filter(patient_id=patient.id).order_by('-created_at').first()
+        # ── 2. Fetch latest ABG ──
+        latest_abg = AbgEntry.objects.filter(patient_id=patient.id).order_by('-created_at').first()
+
+        if not latest_vitals and not latest_abg:
+            return Response({
+                "risk_level": "LOW",
+                "confidence_score": 0,
+                "acidosis": 0,
+                "hypercapnia": 0,
+                "key_factors": [],
+                "message": "No analysis data available for this patient"
+            }, status=status.HTTP_200_OK)
+
+        # Extract values (use safe defaults if missing)
+        spo2 = latest_vitals.spo2 if latest_vitals and latest_vitals.spo2 is not None else 98
+        respiratory_rate = latest_vitals.respiratory_rate if latest_vitals and latest_vitals.respiratory_rate is not None else 16
+        ph = latest_abg.ph if latest_abg and latest_abg.ph is not None else 7.40
+        paco2 = latest_abg.paco2 if latest_abg and latest_abg.paco2 is not None else 40
+
+        # ── 3. AI Risk Calculation ──
+        if spo2 < 90 or ph < 7.35 or paco2 > 45:
+            risk_level = "HIGH"
+            confidence_score = 90
+        elif 90 <= spo2 <= 94:
+            risk_level = "MODERATE"
+            confidence_score = 70
+        else:
+            risk_level = "LOW"
+            confidence_score = 50
+
+        # Determine acidosis and hypercapnia flags
+        acidosis = 1 if ph < 7.35 else 0
+        hypercapnia = 1 if paco2 > 45 else 0
+
+        # ── 4. Store AI result in ai_analysis table ──
+        from therapy.models import AIAnalysis
+        AIAnalysis.objects.create(
+            patient_id=patient.id,
+            risk_level=risk_level,
+            confidence_score=confidence_score,
+            acidosis=acidosis,
+            hypercapnia=hypercapnia
+        )
+
+        # ── 5. Trend Analysis Calculation ──
+        paco2_status = "Rising" if paco2 > 45 else "Normal"
+        ph_status = "Dropping" if ph < 7.35 else "Normal"
+        spo2_status = "Unstable" if spo2 < 92 else "Stable"
+
+        # Overall status: Worsening if any critical condition
+        if paco2 > 45 or ph < 7.35 or spo2 < 92:
+            overall_status = "Worsening"
+        else:
+            overall_status = "Stable"
+
+        # ── 6. Store Trend result in trend_analysis table ──
+        TrendAnalysis.objects.create(
+            patient_id=patient.id,
+            overall_status=overall_status,
+            paco2_status=paco2_status,
+            ph_status=ph_status,
+            spo2_status=spo2_status
+        )
+
+        # Build key_factors dynamically
+        key_factors = []
+        if acidosis == 1:
+            key_factors.append({"factor": "Acidosis (pH < 7.35)", "level": "Critical"})
+        if hypercapnia == 1:
+            key_factors.append({"factor": "Hypercapnia (High CO\u2082)", "level": "Warning"})
+
+        return Response({
+            "risk_level": risk_level,
+            "confidence_score": confidence_score,
+            "acidosis": acidosis,
+            "hypercapnia": hypercapnia,
+            "key_factors": key_factors
+        }, status=status.HTTP_200_OK)
+
+
+class CustomTrendAnalysisAPIView(APIView):
+    """
+    GET /api/patient/trend-analysis/<patient_id>/
+    Fetches the latest trend analysis record for the patient from the database.
+    """
+    def get(self, request, patient_id):
+        try:
+            patient = Patient.objects.get(id=patient_id)
+        except Patient.DoesNotExist:
+            return Response({"error": "Patient not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        latest_trend = TrendAnalysis.objects.filter(patient_id=patient.id).order_by('-recorded_at').first()
+
+        if not latest_trend:
+            return Response({
+                "overall_status": "Stable",
+                "paco2_status": "Normal",
+                "ph_status": "Normal",
+                "spo2_status": "Stable"
+            }, status=status.HTTP_200_OK)
+
+        return Response({
+            "overall_status": latest_trend.overall_status,
+            "paco2_status": latest_trend.paco2_status,
+            "ph_status": latest_trend.ph_status,
+            "spo2_status": latest_trend.spo2_status
+        }, status=status.HTTP_200_OK)
+
+
+class DecisionSupportAPIView(APIView):
+    """
+    GET /api/patient/decision-support/<patient_id>/
+    Fetches latest AI analysis + Trend analysis for the patient
+    and returns combined decision support data.
+    """
+    def get(self, request, patient_id):
+        try:
+            patient = Patient.objects.get(id=patient_id)
+        except Patient.DoesNotExist:
+            return Response({"error": "Patient not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        from therapy.models import AIAnalysis
+
+        latest_ai = AIAnalysis.objects.filter(patient_id=patient.id).order_by('-recorded_at').first()
+        latest_trend = TrendAnalysis.objects.filter(patient_id=patient.id).order_by('-recorded_at').first()
+
+        if not latest_ai and not latest_trend:
+            return Response({
+                "has_data": False,
+                "message": "No analysis data available for this patient"
+            }, status=status.HTTP_200_OK)
+
+        # AI Analysis data
+        risk_level = latest_ai.risk_level if latest_ai else "LOW"
+        confidence_score = latest_ai.confidence_score if latest_ai else 0
+        acidosis = latest_ai.acidosis if latest_ai else 0
+        hypercapnia = latest_ai.hypercapnia if latest_ai else 0
+
+        # Trend data
+        overall_status = latest_trend.overall_status if latest_trend else "Stable"
+        paco2_status = latest_trend.paco2_status if latest_trend else "Normal"
+        ph_status = latest_trend.ph_status if latest_trend else "Normal"
+        spo2_status = latest_trend.spo2_status if latest_trend else "Stable"
+
+        # Decision based on risk_level
+        if risk_level == "HIGH":
+            recommendation = "Critical: Immediate intervention required. Consider escalating to ICU or initiating NIV therapy."
+            action_level = "CRITICAL"
+        elif risk_level == "MODERATE":
+            recommendation = "Warning: Close monitoring required. Adjust oxygen therapy and reassess within 1 hour."
+            action_level = "WARNING"
+        else:
+            recommendation = "Normal: Continue current monitoring protocol. Reassess at next scheduled interval."
+            action_level = "NORMAL"
+
+        return Response({
+            "has_data": True,
+            "risk_level": risk_level,
+            "confidence_score": confidence_score,
+            "acidosis": acidosis,
+            "hypercapnia": hypercapnia,
+            "overall_status": overall_status,
+            "paco2_status": paco2_status,
+            "ph_status": ph_status,
+            "spo2_status": spo2_status,
+            "recommendation": recommendation,
+            "action_level": action_level
+        }, status=status.HTTP_200_OK)
+
+class ClinicalReviewAPIView(APIView):
+    """
+    GET  /api/patient/clinical-review/<patient_id>/
+         Fetches latest vitals + ABG, computes recommended device.
+    POST /api/patient/clinical-review/<patient_id>/
+         Saves accept/override decision into review_recommendation table.
+         Body: { device, fio2, flow_rate, decision: "accepted"|"override", override_reason }
     """
     def get(self, request, patient_id):
         try:
@@ -256,69 +446,66 @@ class AIRiskAPIView(APIView):
         latest_vitals = Vitals.objects.filter(patient_id=patient.id).order_by('-created_at').first()
         latest_abg = AbgEntry.objects.filter(patient_id=patient.id).order_by('-created_at').first()
 
-        risk_level = "STABLE"
-        confidence_score = 90
-        key_factors = []
+        if not latest_vitals and not latest_abg:
+            return Response({
+                "has_data": False,
+                "message": "No clinical data available"
+            }, status=status.HTTP_200_OK)
 
-        spo2 = latest_vitals.spo2 if latest_vitals and latest_vitals.spo2 is not None else None
-        rr = latest_vitals.respiratory_rate if latest_vitals and latest_vitals.respiratory_rate is not None else None
-        ph = latest_abg.ph if latest_abg and latest_abg.ph is not None else None
-        pco2 = latest_abg.paco2 if latest_abg and latest_abg.paco2 is not None else None
+        spo2 = latest_vitals.spo2 if latest_vitals and latest_vitals.spo2 is not None else 98
 
-        # Check conditions
-        is_critical = False
-        is_warning = False
-
-        if ph is not None and ph < 7.35:
-            key_factors.append({"factor": "Acidosis (pH < 7.35)", "level": "Critical"})
-            is_critical = True
-        elif ph is not None and ph > 7.45:
-            key_factors.append({"factor": "Alkalosis (pH > 7.45)", "level": "Warning"})
-            is_warning = True
-
-        if pco2 is not None and pco2 > 45:
-            level = "Critical" if (ph is not None and ph < 7.35) else "Warning"
-            key_factors.append({"factor": f"Hypercapnia (pCO2: {pco2})", "level": level})
-            if pco2 > 50:
-                is_critical = True
-            else:
-                is_warning = True
-
-        if spo2 is not None:
-            if spo2 < 88:
-                key_factors.append({"factor": f"Hypoxemia (SpO2: {spo2}%)", "level": "Critical"})
-                is_critical = True
-            elif spo2 <= 92:
-                key_factors.append({"factor": f"Low Oxygen (SpO2: {spo2}%)", "level": "Warning"})
-                is_warning = True
-
-        if rr is not None and rr > 24:
-            key_factors.append({"factor": f"Tachypnea (RR: {rr})", "level": "Critical"})
-            is_critical = True
-
-        # Determine overall risk
-        if is_critical:
-            risk_level = "HIGH RISK"
-            confidence_score = 92
-        elif is_warning:
-            risk_level = "WARNING"
-            confidence_score = 85
+        if spo2 < 85:
+            device = "Non-Rebreather Mask"
+            fio2 = "60-90%"
+            flow_rate = "10-15 L/min"
+        elif spo2 <= 92:
+            device = "Venturi Mask"
+            fio2 = "28-35%"
+            flow_rate = "4-8 L/min"
         else:
-            risk_level = "STABLE"
-            confidence_score = 95
-            key_factors.append({"factor": "All parameters within normal limits", "level": "Stable"})
+            device = "Nasal Cannula"
+            fio2 = "24-28%"
+            flow_rate = "1-4 L/min"
 
         return Response({
-            "risk_level": risk_level,
-            "confidence_score": confidence_score,
-            "key_factors": key_factors
+            "has_data": True,
+            "recommended_device": device,
+            "fio2": fio2,
+            "flow_rate": flow_rate,
+            "spo2": spo2
         }, status=status.HTTP_200_OK)
 
+    def post(self, request, patient_id):
+        try:
+            patient = Patient.objects.get(id=patient_id)
+        except Patient.DoesNotExist:
+            return Response({"error": "Patient not found."}, status=status.HTTP_404_NOT_FOUND)
 
-class CustomTrendAnalysisAPIView(APIView):
+        data = request.data
+        device = data.get('device', '')
+        fio2 = data.get('fio2', '')
+        flow_rate = data.get('flow_rate', '')
+        decision = data.get('decision', 'accepted')
+        override_reason = data.get('override_reason', '')
+
+        from therapy.models import ReviewRecommendation
+        ReviewRecommendation.objects.create(
+            patient_id=patient.id,
+            device=device,
+            fio2=fio2,
+            flow_rate=flow_rate,
+            decision=decision,
+            override_reason=override_reason
+        )
+
+        return Response({"message": "Review recommendation saved successfully."}, status=status.HTTP_201_CREATED)
+
+
+class ClinicalTherapyPlanAPIView(APIView):
     """
-    GET /api/patient/trend-analysis/<patient_id>/
-    Calculates patient trend (Improving/Stable/Worsening) based on latest two vitals/ABGs.
+    GET /api/patient/clinical-therapy/<patient_id>/
+    Fetches latest review_recommendation + AI analysis, computes therapy plan,
+    stores in therapy_recommendation table, returns the plan.
     """
     def get(self, request, patient_id):
         try:
@@ -326,80 +513,98 @@ class CustomTrendAnalysisAPIView(APIView):
         except Patient.DoesNotExist:
             return Response({"error": "Patient not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Fetch latest two records
-        vitals_list = list(Vitals.objects.filter(patient_id=patient.id).order_by('-created_at')[:2])
-        abg_list = list(AbgEntry.objects.filter(patient_id=patient.id).order_by('-created_at')[:2])
+        from therapy.models import ReviewRecommendation as ReviewRec, AIAnalysis, TherapyRecommendation
 
-        trend_indicators = []
-        worsening_count = 0
-        improving_count = 0
+        latest_rec = ReviewRec.objects.filter(patient_id=patient.id).order_by('-created_at').first()
+        latest_ai = AIAnalysis.objects.filter(patient_id=patient.id).order_by('-recorded_at').first()
 
-        # PaCO2 Retention Trend
-        pco2_status = "Stable"
-        if len(abg_list) == 2:
-            current_pco2 = abg_list[0].paco2
-            previous_pco2 = abg_list[1].paco2
-            if current_pco2 is not None and previous_pco2 is not None:
-                if current_pco2 > previous_pco2:
-                    pco2_status = "Rising"
-                    worsening_count += 1
-                elif current_pco2 < previous_pco2:
-                    improving_count += 1
-        
-        trend_indicators.append({
-            "factor": "PaCO2 Retention",
-            "description": "Carbon dioxide levels",
-            "status": pco2_status
-        })
+        if not latest_rec:
+            return Response({
+                "has_data": False,
+                "message": "No recommendation data available"
+            }, status=status.HTTP_200_OK)
 
-        # pH Balance Trend
-        ph_status = "Stable"
-        if len(abg_list) == 2:
-            current_ph = abg_list[0].ph
-            previous_ph = abg_list[1].ph
-            if current_ph is not None and previous_ph is not None:
-                if current_ph < previous_ph:
-                    ph_status = "Dropping"
-                    worsening_count += 1
-                elif current_ph > previous_ph:
-                    improving_count += 1
-        
-        trend_indicators.append({
-            "factor": "pH Balance",
-            "description": "Acidity levels",
-            "status": ph_status
-        })
+        device = latest_rec.device
+        fio2 = latest_rec.fio2
+        flow_rate = latest_rec.flow_rate
+        risk_level = latest_ai.risk_level if latest_ai else "LOW"
 
-        # SpO2 Stability Trend
-        spo2_status = "Stable"
-        if len(vitals_list) == 2:
-            current_spo2 = vitals_list[0].spo2
-            previous_spo2 = vitals_list[1].spo2
-            if current_spo2 is not None and previous_spo2 is not None:
-                if current_spo2 < previous_spo2:
-                    spo2_status = "Unstable"
-                    worsening_count += 1
-                elif current_spo2 > previous_spo2:
-                    improving_count += 1
-        
-        trend_indicators.append({
-            "factor": "SpO2 Stability",
-            "description": "Oxygen saturation",
-            "status": spo2_status
-        })
-
-        # Determine overall trend status
-        if worsening_count >= 2:
-            trend_status = "WORSENING"
-        elif improving_count > 0 and worsening_count == 0:
-            trend_status = "IMPROVING"
+        # Target SpO2 logic
+        if device == "Non-Rebreather Mask":
+            target_spo2 = "92-96%"
+        elif device == "Venturi Mask":
+            target_spo2 = "88-92%"
         else:
-            trend_status = "STABLE"
+            target_spo2 = "94-98%"
+
+        # Next ABG logic
+        if risk_level in ("HIGH", "MODERATE"):
+            next_abg = "30 mins"
+        else:
+            next_abg = "1 hour"
+
+        # Rationale
+        rationale = "Patient shows " + risk_level + " risk. Maintain oxygen therapy via " + device + " and monitor closely."
+
+        # Store therapy plan in therapy_recommendation table
+        TherapyRecommendation.objects.create(
+            patient_id=patient.id,
+            device=device,
+            fio2=fio2,
+            flow_rate=flow_rate,
+            target_spo2=target_spo2,
+            next_abg=next_abg,
+            rationale=rationale
+        )
 
         return Response({
-            "trend_status": trend_status,
-            "trend_indicators": trend_indicators
+            "has_data": True,
+            "device": device,
+            "fio2": fio2,
+            "flow_rate": flow_rate,
+            "target_spo2": target_spo2,
+            "next_abg_time": next_abg,
+            "rationale": rationale,
+            "risk_level": risk_level
         }, status=status.HTTP_200_OK)
+
+
+class ClinicalReassessmentAPIView(APIView):
+    """
+    POST /api/patient/clinical-reassessment/<patient_id>/
+    Body: { reassessment_time_minutes: 30|60|120|240 }
+    Stores in schedule_reassessment table with due_time = NOW() + INTERVAL.
+    """
+    def post(self, request, patient_id):
+        try:
+            patient = Patient.objects.get(id=patient_id)
+        except Patient.DoesNotExist:
+            return Response({"error": "Patient not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        from therapy.models import ScheduleReassessment
+        from django.utils import timezone
+        import datetime
+
+        minutes = request.data.get('reassessment_time_minutes', 60)
+        try:
+            minutes = int(minutes)
+        except (ValueError, TypeError):
+            minutes = 60
+
+        due_time = timezone.now() + datetime.timedelta(minutes=minutes)
+
+        ScheduleReassessment.objects.create(
+            patient_id=patient.id,
+            reassessment_minutes=minutes,
+            due_time=due_time,
+            status='pending'
+        )
+
+        return Response({
+            "message": "Reassessment scheduled successfully.",
+            "due_time": due_time.isoformat(),
+            "reassessment_time_minutes": minutes
+        }, status=status.HTTP_201_CREATED)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

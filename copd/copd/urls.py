@@ -12,7 +12,8 @@ from staff.views import (
     StaffLoginAPIView, StaffSignupAPIView,
     StaffForgotPasswordAPIView, StaffVerifyOTPAPIView,
     StaffResetPasswordAPIView, StaffDashboardAPIView, StaffProfileAPIView,
-    StaffPatientsAPIView, StaffUpdateVitalsAPIView, StaffUpdateAbgAPIView
+    StaffPatientsAPIView, StaffUpdateVitalsAPIView, StaffUpdateAbgAPIView,
+    ReassessmentAPIView
 )
 
 # Admin Panel
@@ -33,7 +34,9 @@ from patients.views import (
     PatientDetailsForDoctorAPIView,
     AddBaselineDetailsAPIView, AddGoldClassificationAPIView, AddSpirometryAPIView,
     AddGasExchangeHistoryAPIView, AddCurrentSymptomsAPIView, AddVitalsAPIView,
-    AddAbgEntryAPIView, ReassessmentChecklistAPIView, AIRiskAPIView, CustomTrendAnalysisAPIView
+    AddAbgEntryAPIView, ReassessmentChecklistAPIView, AIRiskAPIView, CustomTrendAnalysisAPIView,
+    DecisionSupportAPIView, ClinicalReviewAPIView, ClinicalTherapyPlanAPIView,
+    ClinicalReassessmentAPIView
 )
 
 # Therapy
@@ -93,6 +96,7 @@ urlpatterns = [
     path('api/staff/patients/', PatientListAPIView.as_view(), name='staff-patients'),
     path('api/staff/update-vitals/<int:patient_id>/', StaffUpdateVitalsAPIView.as_view(), name='staff-update-vitals'),
     path('api/staff/update-abg/<int:patient_id>/', StaffUpdateAbgAPIView.as_view(), name='staff-update-abg'),
+    path('api/reassessment/', ReassessmentAPIView.as_view(), name='reassessment'),
 
     # ──────────────────────────────────────────────────
     # Admin Panel
@@ -154,6 +158,10 @@ urlpatterns = [
     path('api/patient/ai-risk/<int:patient_id>/', AIRiskAPIView.as_view(), name='patient-ai-risk'),
     path('api/patients/<int:patient_id>/abg-trends/', ABGTrendsAPIView.as_view(), name='patient-abg-trends'),
     path('api/patient/trend-analysis/<int:patient_id>/', CustomTrendAnalysisAPIView.as_view(), name='patient-trend-analysis'),
+    path('api/patient/decision-support/<int:patient_id>/', DecisionSupportAPIView.as_view(), name='patient-decision-support'),
+    path('api/patient/clinical-review/<int:patient_id>/', ClinicalReviewAPIView.as_view(), name='patient-clinical-review'),
+    path('api/patient/clinical-therapy/<int:patient_id>/', ClinicalTherapyPlanAPIView.as_view(), name='patient-clinical-therapy'),
+    path('api/patient/clinical-reassessment/<int:patient_id>/', ClinicalReassessmentAPIView.as_view(), name='patient-clinical-reassessment'),
     path('api/patient/hypoxemia-cause/', CustomHypoxemiaCauseAPIView.as_view(), name='patient-hypoxemia-cause'),
     path('api/patient/oxygen-requirement/', CustomOxygenRequirementAPIView.as_view(), name='patient-custom-oxygen-req'),
     path('api/patients/<int:patient_id>/oxygen-requirement/', OxygenRequirementAPIView.as_view(), name='patient-oxygen-req'),

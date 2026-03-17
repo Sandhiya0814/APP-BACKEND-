@@ -122,3 +122,4 @@ class ReassessmentChecklist(models.Model):
 
     class Meta:
         db_table = 'reassessment_checklist'
+
