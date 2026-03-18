@@ -76,3 +76,28 @@ class Reassessment(models.Model):
 
     def __str__(self):
         return f"{self.type} reassessment for patient {self.patient_id}"
+
+
+class StaffChecklist(models.Model):
+    """
+    Stores the actual reassessment values entered by staff.
+    Links to reassessment_shedule via reassessment_id.
+    Uses UPSERT: only one record per reassessment_id.
+    """
+    patient_id = models.IntegerField()
+    reassessment_id = models.IntegerField(null=True, blank=True, unique=True)
+    spo2 = models.FloatField(null=True, blank=True)
+    respiratory_rate = models.FloatField(null=True, blank=True)
+    heart_rate = models.FloatField(null=True, blank=True)
+    abg_values = models.TextField(default='', blank=True)
+    remarks = models.TextField(default='', blank=True)
+    entered_by = models.CharField(max_length=20, default='staff')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'reassessment_checklist'
+
+    def __str__(self):
+        return f"Staff checklist for patient {self.patient_id}"
+

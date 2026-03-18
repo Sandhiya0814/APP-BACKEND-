@@ -296,21 +296,23 @@ class StaffDashboardAPIView(APIView):
             "name": staff.name
         }
 
-        # Fetch pending reassessments joined with patient
+        # Fetch pending reassessments from BOTH tables
+        from therapy.models import ScheduleReassessment as ScheduleReassessmentModel
         now = timezone.now()
+
+        reassessment_list = []
+
+        # 1. From reassessment table (staff.models.Reassessment)
         pending_reassessments = Reassessment.objects.filter(
             status='pending'
         ).order_by('due_time')
 
-        reassessment_list = []
         for r in pending_reassessments:
-            # Get patient details
             try:
                 patient = Patient.objects.get(id=r.patient_id)
             except Patient.DoesNotExist:
                 continue
 
-            # Calculate due_in in minutes (negative = overdue)
             if r.due_time:
                 diff = r.due_time - now
                 due_in = int(diff.total_seconds() / 60)
@@ -323,10 +325,58 @@ class StaffDashboardAPIView(APIView):
                 "patient_id": r.patient_id,
                 "patient_name": patient.full_name,
                 "bed_number": patient.bed_number,
-                "due_in": due_in
+                "ward_no": patient.ward if hasattr(patient, 'ward') else "",
+                "due_in": due_in,
+                "status": r.status
             })
 
-        pending_count = Reassessment.objects.filter(status='pending').count()
+        # 2. From schedule_reassessment table (therapy.models.ScheduleReassessment)
+        # AUTO STATUS UPDATE: pending → due when scheduled_time <= NOW()
+        ScheduleReassessmentModel.objects.filter(
+            status='pending',
+            scheduled_time__lte=now
+        ).update(status='due')
+
+        scheduled_pending = ScheduleReassessmentModel.objects.filter(
+            status__in=['pending', 'due']
+        ).order_by('scheduled_time')
+
+        for sr in scheduled_pending:
+            if sr.scheduled_time:
+                diff = sr.scheduled_time - now
+                due_in = int(diff.total_seconds() / 60)
+            else:
+                due_in = 0
+
+            # Use stored patient_name/bed_no, fallback to Patient table
+            p_name = sr.patient_name
+            p_bed = sr.bed_no
+            p_ward = sr.ward_no
+            if not p_name or not p_bed:
+                try:
+                    patient = Patient.objects.get(id=sr.patient_id)
+                    p_name = p_name or patient.full_name
+                    p_bed = p_bed or patient.bed_number
+                    p_ward = p_ward or patient.ward
+                except Patient.DoesNotExist:
+                    p_name = p_name or "Unknown"
+                    p_bed = p_bed or "--"
+
+            reassessment_list.append({
+                "id": sr.id,
+                "type": sr.reassessment_type,  # SpO2 or ABG
+                "patient_id": sr.patient_id,
+                "patient_name": p_name,
+                "bed_number": p_bed,
+                "ward_no": p_ward,
+                "due_in": due_in,
+                "status": sr.status
+            })
+
+        # Sort merged list by due_in ascending
+        reassessment_list.sort(key=lambda x: x["due_in"])
+
+        pending_count = len(reassessment_list)
 
         # Fetch latest completed reassessments (for dashboard display)
         completed = Reassessment.objects.filter(
@@ -459,13 +509,23 @@ class StaffUpdateVitalsAPIView(APIView):
         if not vital:
             return Response({"error": "No existing vitals found to update"}, status=status.HTTP_404_NOT_FOUND)
         
+        old_spo2 = vital.spo2  # Capture previous value before update
         vital.spo2 = request.data.get('spo2', vital.spo2)
         vital.respiratory_rate = request.data.get('respiratory_rate', vital.respiratory_rate)
         vital.heart_rate = request.data.get('heart_rate', vital.heart_rate)
         vital.temperature = request.data.get('temperature', vital.temperature)
         vital.blood_pressure = request.data.get('blood_pressure', vital.blood_pressure)
         vital.save()
-        
+
+        # Check for SpO2 drop and create doctor alert if needed
+        new_spo2 = request.data.get('spo2')
+        if new_spo2 is not None:
+            try:
+                from alerts.views import check_spo2_drop_and_alert
+                check_spo2_drop_and_alert(patient_id, new_spo2)
+            except Exception as e:
+                print(f"[StaffUpdateVitals] Alert check error: {e}")
+
         return Response({"message": "Vitals updated successfully"}, status=status.HTTP_200_OK)
 
 
@@ -587,3 +647,416 @@ class ReassessmentAPIView(APIView):
                 "reassessment_time": latest.reassessment_time.strftime("%Y-%m-%d %H:%M:%S") if latest.reassessment_time else None,
             }
         }, status=status.HTTP_200_OK)
+
+
+class ScheduleReassessmentAPIView(APIView):
+    """
+    POST /api/schedule-reassessment/
+    Body: { patient_id, patient_name, bed_no, ward_no, reassessment_type, scheduled_time, scheduled_by }
+    Saves to sandhiya.schedule_reassessment table.
+
+    GET /api/schedule-reassessment/
+    Returns all pending/due scheduled reassessments ordered by scheduled_time ASC.
+    Also auto-updates status from 'pending' → 'due' when scheduled_time <= NOW().
+    """
+    def post(self, request):
+        from therapy.models import ScheduleReassessment
+
+        patient_id = request.data.get('patient_id')
+        patient_name = request.data.get('patient_name', '')
+        bed_no = request.data.get('bed_no', '')
+        ward_no = request.data.get('ward_no', '')
+        reassessment_type = request.data.get('reassessment_type', 'SpO2')
+        scheduled_time_str = request.data.get('scheduled_time', '')
+        reassessment_minutes = request.data.get('reassessment_minutes', 60)
+        scheduled_by = request.data.get('scheduled_by', 'staff')
+
+        if not patient_id:
+            return Response({"status": "error", "message": "patient_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        from django.utils import timezone
+        from datetime import datetime as dt
+
+        # Parse scheduled_time
+        if scheduled_time_str:
+            try:
+                parsed_time = dt.strptime(scheduled_time_str, "%Y-%m-%d %H:%M:%S")
+                from django.utils.timezone import make_aware
+                parsed_time = make_aware(parsed_time)
+            except (ValueError, TypeError):
+                parsed_time = timezone.now()
+        else:
+            import datetime
+            try:
+                minutes = int(reassessment_minutes)
+            except (ValueError, TypeError):
+                minutes = 60
+            parsed_time = timezone.now() + datetime.timedelta(minutes=minutes)
+
+        try:
+            patient_id_int = int(patient_id)
+        except (ValueError, TypeError):
+            return Response({"status": "error", "message": "Invalid patient_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Lookup patient_name, bed_no, ward_no from Patient table if not supplied
+        if not patient_name or not bed_no or not ward_no:
+            from patients.models import Patient
+            try:
+                patient = Patient.objects.get(id=patient_id_int)
+                if not patient_name:
+                    patient_name = patient.full_name
+                if not bed_no:
+                    bed_no = patient.bed_number or ''
+                if not ward_no:
+                    ward_no = patient.ward or ''
+            except Exception:
+                pass
+
+        ScheduleReassessment.objects.create(
+            patient_id=patient_id_int,
+            patient_name=patient_name,
+            bed_no=bed_no,
+            ward_no=ward_no,
+            reassessment_type=reassessment_type,
+            reassessment_minutes=int(reassessment_minutes) if reassessment_minutes else 60,
+            scheduled_time=parsed_time,
+            status='pending',
+            scheduled_by=scheduled_by,
+        )
+
+        return Response({
+            "status": "success",
+            "message": "Scheduled successfully"
+        }, status=status.HTTP_201_CREATED)
+
+    def get(self, request):
+        from therapy.models import ScheduleReassessment
+        from django.utils import timezone
+
+        now = timezone.now()
+
+        # AUTO STATUS UPDATE: pending → due when scheduled_time <= NOW()
+        ScheduleReassessment.objects.filter(
+            status='pending',
+            scheduled_time__lte=now
+        ).update(status='due')
+
+        # Fetch pending + due
+        records = ScheduleReassessment.objects.filter(
+            status__in=['pending', 'due']
+        ).order_by('scheduled_time')
+
+        items = []
+        for r in records:
+            if r.scheduled_time:
+                diff = r.scheduled_time - now
+                due_in = int(diff.total_seconds() / 60)
+            else:
+                due_in = 0
+
+            items.append({
+                "id": r.id,
+                "patient_id": r.patient_id,
+                "patient_name": r.patient_name,
+                "bed_no": r.bed_no,
+                "ward_no": r.ward_no,
+                "reassessment_type": r.reassessment_type,
+                "scheduled_time": r.scheduled_time.strftime("%Y-%m-%d %H:%M:%S") if r.scheduled_time else None,
+                "due_in": due_in,
+                "status": r.status,
+                "scheduled_by": r.scheduled_by,
+            })
+
+        return Response({
+            "status": "success",
+            "count": len(items),
+            "data": items
+        }, status=status.HTTP_200_OK)
+
+
+class StaffChecklistAPIView(APIView):
+    """
+    POST /api/staff-checklist/
+    Supports TWO modes:
+      1. Checklist mode (new): Body contains boolean checklist items
+         { patient_id, reassessment_id, check_spo2, check_respiratory_rate,
+           check_consciousness, check_device_fit, check_repeat_abg, remarks }
+      2. Vitals mode (legacy): Body contains numeric vitals
+         { patient_id, reassessment_id, spo2, respiratory_rate, heart_rate,
+           abg_values, remarks }
+    Saves data into staff_checklist table using UPSERT logic.
+    Auto-updates reassessment_shedule.status = 'completed' if reassessment_id is provided.
+    """
+    def post(self, request):
+        from .models import StaffChecklist
+        from therapy.models import ScheduleReassessment
+
+        patient_id = request.data.get('patient_id')
+        reassessment_id = request.data.get('reassessment_id')
+        remarks = request.data.get('remarks', '')
+
+        if not patient_id:
+            return Response({"status": "error", "message": "patient_id is required"},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            patient_id_int = int(patient_id)
+        except (ValueError, TypeError):
+            return Response({"status": "error", "message": "Invalid patient_id"},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        # Detect mode: checklist (boolean flags) vs vitals (numeric values)
+        is_checklist_mode = any(
+            request.data.get(key) is not None
+            for key in ['check_spo2', 'check_respiratory_rate', 'check_consciousness',
+                        'check_device_fit', 'check_repeat_abg']
+        )
+
+        spo2_val = None
+        rr_val = None
+        hr_val = None
+        abg_values = request.data.get('abg_values', '')
+
+        if is_checklist_mode:
+            # ── Checklist mode: boolean flags ──
+            check_spo2 = request.data.get('check_spo2', False)
+            check_rr = request.data.get('check_respiratory_rate', False)
+            check_consciousness = request.data.get('check_consciousness', False)
+            check_device_fit = request.data.get('check_device_fit', False)
+            check_abg = request.data.get('check_repeat_abg', False)
+
+            # At least one must be checked
+            if not any([check_spo2, check_rr, check_consciousness, check_device_fit, check_abg]):
+                return Response({"status": "error", "message": "At least one checklist item must be checked"},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            # Build checklist summary for remarks if not already provided
+            if not remarks:
+                items = []
+                if check_spo2: items.append("SpO2")
+                if check_rr: items.append("Respiratory Rate")
+                if check_consciousness: items.append("Consciousness/Sensorium")
+                if check_device_fit: items.append("Device Fit & Position")
+                if check_abg: items.append("Repeat ABG")
+                remarks = "Checklist completed: " + ", ".join(items)
+
+            print(f"[StaffChecklist] CHECKLIST MODE: patient={patient_id_int}, "
+                  f"spo2={check_spo2}, rr={check_rr}, consciousness={check_consciousness}, "
+                  f"device_fit={check_device_fit}, abg={check_abg}")
+
+        else:
+            # ── Vitals mode (legacy): numeric values ──
+            spo2 = request.data.get('spo2')
+            respiratory_rate = request.data.get('respiratory_rate')
+            heart_rate = request.data.get('heart_rate')
+
+            if spo2 is None:
+                return Response({"status": "error", "message": "spo2 is required"},
+                                status=status.HTTP_400_BAD_REQUEST)
+            if respiratory_rate is None:
+                return Response({"status": "error", "message": "respiratory_rate is required"},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                spo2_val = float(spo2)
+            except (ValueError, TypeError):
+                return Response({"status": "error", "message": "Invalid spo2 value"},
+                                status=status.HTTP_400_BAD_REQUEST)
+            if spo2_val < 0 or spo2_val > 100:
+                return Response({"status": "error", "message": "SpO2 must be between 0 and 100"},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                rr_val = float(respiratory_rate)
+            except (ValueError, TypeError):
+                return Response({"status": "error", "message": "Invalid respiratory_rate value"},
+                                status=status.HTTP_400_BAD_REQUEST)
+            if rr_val < 10 or rr_val > 40:
+                return Response({"status": "error", "message": "Respiratory Rate must be between 10 and 40 /min"},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            hr_val = None
+            if heart_rate is not None and str(heart_rate).strip() != '':
+                try:
+                    hr_val = float(heart_rate)
+                except (ValueError, TypeError):
+                    return Response({"status": "error", "message": "Invalid heart_rate value"},
+                                    status=status.HTTP_400_BAD_REQUEST)
+                if hr_val < 30 or hr_val > 200:
+                    return Response({"status": "error", "message": "Heart Rate must be between 30 and 200 bpm"},
+                                    status=status.HTTP_400_BAD_REQUEST)
+
+        # Parse reassessment_id
+        reassessment_id_int = None
+        if reassessment_id:
+            try:
+                reassessment_id_int = int(reassessment_id)
+            except (ValueError, TypeError):
+                reassessment_id_int = None
+
+        # ── UPSERT logic: update if exists, else create ──
+        created = False
+        if reassessment_id_int:
+            existing = StaffChecklist.objects.filter(
+                reassessment_id=reassessment_id_int
+            ).first()
+
+            if existing:
+                # UPDATE existing record — overwrite old values
+                existing.patient_id = patient_id_int
+                existing.spo2 = spo2_val
+                existing.respiratory_rate = rr_val
+                existing.heart_rate = hr_val
+                existing.abg_values = abg_values if abg_values else ''
+                existing.remarks = remarks if remarks else ''
+                existing.entered_by = 'staff'
+                existing.save()
+                checklist = existing
+                print(f"[StaffChecklist] UPDATED: id={checklist.id}, patient={patient_id_int}, "
+                      f"reassessment={reassessment_id_int}")
+            else:
+                # INSERT new record
+                checklist = StaffChecklist.objects.create(
+                    patient_id=patient_id_int,
+                    reassessment_id=reassessment_id_int,
+                    spo2=spo2_val,
+                    respiratory_rate=rr_val,
+                    heart_rate=hr_val,
+                    abg_values=abg_values if abg_values else '',
+                    remarks=remarks if remarks else '',
+                    entered_by='staff',
+                )
+                created = True
+                print(f"[StaffChecklist] CREATED: id={checklist.id}, patient={patient_id_int}, "
+                      f"reassessment={reassessment_id_int}")
+        else:
+            # No reassessment_id — always insert
+            checklist = StaffChecklist.objects.create(
+                patient_id=patient_id_int,
+                reassessment_id=None,
+                spo2=spo2_val,
+                respiratory_rate=rr_val,
+                heart_rate=hr_val,
+                abg_values=abg_values if abg_values else '',
+                remarks=remarks if remarks else '',
+                entered_by='staff',
+            )
+            created = True
+            print(f"[StaffChecklist] CREATED (no reassessment_id): id={checklist.id}, "
+                  f"patient={patient_id_int}")
+
+        # Auto-update BOTH schedule tables status to 'completed'
+        if reassessment_id_int:
+            # 1. Update reassessment_shedule (therapy.models.ScheduleReassessment)
+            try:
+                schedule = ScheduleReassessment.objects.get(id=reassessment_id_int)
+                schedule.status = 'completed'
+                schedule.save()
+                print(f"[StaffChecklist] UPDATED reassessment_shedule id={reassessment_id_int} -> 'completed'")
+            except ScheduleReassessment.DoesNotExist:
+                print(f"[StaffChecklist] reassessment_shedule id={reassessment_id_int} NOT FOUND, trying reassessment_schedule")
+
+            # 2. Also update reassessment_schedule (therapy.models.ReassessmentSchedule)
+            try:
+                from therapy.models import ReassessmentSchedule
+                rs = ReassessmentSchedule.objects.get(id=reassessment_id_int)
+                rs.status = 'completed'
+                rs.save()
+                print(f"[StaffChecklist] UPDATED reassessment_schedule id={reassessment_id_int} -> 'completed'")
+            except Exception:
+                print(f"[StaffChecklist] reassessment_schedule id={reassessment_id_int} NOT FOUND (ok)")
+
+            # 3. Also update staff.models.Reassessment table if the item came from there
+            try:
+                from .models import Reassessment
+                r_obj = Reassessment.objects.get(id=reassessment_id_int, status='pending')
+                r_obj.status = 'completed'
+                r_obj.save()
+                print(f"[StaffChecklist] UPDATED reassessment id={reassessment_id_int} -> 'completed'")
+            except Exception:
+                print(f"[StaffChecklist] reassessment id={reassessment_id_int} NOT FOUND or already completed (ok)")
+
+        # Check for SpO2 drop and create doctor alert if needed (only in vitals mode)
+        if spo2_val is not None:
+            try:
+                from alerts.views import check_spo2_drop_and_alert
+                check_spo2_drop_and_alert(patient_id_int, spo2_val)
+            except Exception as e:
+                print(f"[StaffChecklist] Alert check error: {e}")
+
+        return Response({
+            "status": "success",
+            "message": "Reassessment checklist saved successfully",
+            "checklist_id": checklist.id
+        }, status=status.HTTP_201_CREATED)
+
+
+class StaffReassessmentValuesAPIView(APIView):
+    """
+    GET /api/patient/staff-reassessments/<patient_id>/
+    Returns the LATEST staff-entered reassessment values for a patient.
+    Deduplicates by reassessment_id — only the most recent entry per
+    reassessment_id is returned. Used by Doctor module to view staff entries.
+    """
+    def get(self, request, patient_id):
+        from .models import StaffChecklist
+        from therapy.models import ScheduleReassessment
+        from patients.models import Patient
+
+        try:
+            patient = Patient.objects.get(id=patient_id)
+        except Patient.DoesNotExist:
+            return Response({"error": "Patient not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Fetch all staff checklists for this patient, newest first
+        checklists = StaffChecklist.objects.filter(
+            patient_id=patient_id
+        ).order_by('-created_at')
+
+        # Deduplicate: keep only latest entry per reassessment_id
+        seen_reassessment_ids = set()
+        unique_entries = []
+
+        for sc in checklists:
+            key = sc.reassessment_id if sc.reassessment_id else f"no_rid_{sc.id}"
+            if key in seen_reassessment_ids:
+                continue
+            seen_reassessment_ids.add(key)
+
+            # Try to get linked reassessment schedule info
+            schedule_info = None
+            if sc.reassessment_id:
+                try:
+                    rs = ScheduleReassessment.objects.get(id=sc.reassessment_id)
+                    schedule_info = {
+                        "reassessment_type": rs.reassessment_type,
+                        "scheduled_time": rs.scheduled_time.strftime("%Y-%m-%d %H:%M:%S") if rs.scheduled_time else None,
+                        "scheduled_by": rs.scheduled_by,
+                    }
+                except ScheduleReassessment.DoesNotExist:
+                    schedule_info = None
+
+            unique_entries.append({
+                "id": sc.id,
+                "patient_id": sc.patient_id,
+                "patient_name": patient.full_name,
+                "reassessment_id": sc.reassessment_id,
+                "reassessment_type": schedule_info["reassessment_type"] if schedule_info else "SpO2",
+                "spo2": sc.spo2,
+                "respiratory_rate": sc.respiratory_rate,
+                "heart_rate": sc.heart_rate,
+                "abg_values": sc.abg_values,
+                "remarks": sc.remarks,
+                "entered_by": sc.entered_by,
+                "created_at": sc.created_at.strftime("%Y-%m-%d %H:%M:%S") if sc.created_at else None,
+                "schedule_info": schedule_info,
+            })
+
+        return Response({
+            "status": "success",
+            "patient_id": patient_id,
+            "patient_name": patient.full_name,
+            "count": len(unique_entries),
+            "data": unique_entries
+        }, status=status.HTTP_200_OK)
+

@@ -110,16 +110,7 @@ class AbgEntry(models.Model):
         db_table = 'abg_entry'
 
 
-class ReassessmentChecklist(models.Model):
-    patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name='reassessments')
-    spo2_checked = models.BooleanField(default=False)
-    resp_rate_checked = models.BooleanField(default=False)
-    consciousness_checked = models.BooleanField(default=False)
-    device_fit_checked = models.BooleanField(default=False)
-    abg_checked = models.BooleanField(default=False)
-    all_clear = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table = 'reassessment_checklist'
+# NOTE: reassessment_checklist table is now managed by staff.models.StaffChecklist
+# It stores actual vitals values (spo2, respiratory_rate, heart_rate, remarks)
+# instead of boolean check fields.
 

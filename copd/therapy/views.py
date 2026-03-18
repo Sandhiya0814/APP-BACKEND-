@@ -540,7 +540,7 @@ class ScheduleReassessmentAPIView(APIView):
     """
     GET  /api/patients/<patient_id>/schedule-reassessment/
     POST /api/patients/<patient_id>/schedule-reassessment/
-    Body: { interval: "30m"|"1h"|"2h"|"4h" }
+    Body: { interval: "30m"|"1h"|"2h"|"4h", reassessment_type: "SpO2"|"ABG" }
     """
     VALID_INTERVALS = ['30m', '1h', '2h', '4h']
 
@@ -559,17 +559,43 @@ class ScheduleReassessmentAPIView(APIView):
         if interval not in self.VALID_INTERVALS:
             return Response({"error": f"interval must be one of: {', '.join(self.VALID_INTERVALS)}"}, status=status.HTTP_400_BAD_REQUEST)
         interval_map = {'30m': 30, '1h': 60, '2h': 120, '4h': 240}
+        minutes = interval_map[interval]
         from datetime import timedelta
-        scheduled_at = timezone.now() + timedelta(minutes=interval_map[interval])
+        scheduled_at = timezone.now() + timedelta(minutes=minutes)
+
+        # Lookup patient info
+        from patients.models import Patient
+        try:
+            p = Patient.objects.get(id=patient_id)
+            p_name = p.full_name
+            p_bed = p.bed_number or ''
+            p_ward = p.ward or ''
+        except Patient.DoesNotExist:
+            p_name = ''
+            p_bed = ''
+            p_ward = ''
+
+        reassessment_type = request.data.get('reassessment_type', 'SpO2')
+        scheduled_by = request.data.get('scheduled_by', 'doctor')
+
         record = ScheduleReassessment.objects.create(
-            patient_id=patient_id, interval=interval, scheduled_at=scheduled_at
+            patient_id=patient_id,
+            patient_name=p_name,
+            bed_no=p_bed,
+            ward_no=p_ward,
+            reassessment_type=reassessment_type,
+            reassessment_minutes=minutes,
+            scheduled_time=scheduled_at,
+            status='pending',
+            scheduled_by=scheduled_by,
         )
         return Response({
             "message": f"Reassessment scheduled in {interval}.",
             "patient_id": patient_id,
-            "interval": record.interval,
-            "scheduled_at": record.scheduled_at,
+            "reassessment_type": reassessment_type,
+            "scheduled_time": record.scheduled_time.strftime("%Y-%m-%d %H:%M:%S") if record.scheduled_time else None,
         }, status=status.HTTP_201_CREATED)
+
 
 
 class UrgentActionAPIView(APIView):

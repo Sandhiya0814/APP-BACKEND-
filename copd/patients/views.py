@@ -4,7 +4,7 @@ from rest_framework import status
 
 from .models import (
     Patient, BaselineDetails, GoldClassification, SpirometryData,
-    GasExchangeHistory, CurrentSymptoms, Vitals, AbgEntry, ReassessmentChecklist
+    GasExchangeHistory, CurrentSymptoms, Vitals, AbgEntry
 )
 from therapy.models import TrendAnalysis
 from .serializers import (
@@ -85,8 +85,8 @@ class PatientListAPIView(APIView):
                 "name": p.full_name,
                 "ward_no": p.ward,
                 "room_no": p.bed_number,
-                "spo2": spo2_val if spo2_val is not None else "--",
-                "respiratory_rate": rr_val if rr_val is not None else "--",
+                "spo2": str(int(spo2_val)) if spo2_val is not None else "--",
+                "respiratory_rate": str(int(rr_val)) if rr_val is not None else "--",
                 "status": display_status
             })
 
@@ -180,17 +180,40 @@ class PatientDetailsForDoctorAPIView(APIView):
         from datetime import date
         age = (date.today() - patient.dob).days // 365 if patient.dob else None
 
-        # Get latest vitals
+        # Get latest vitals from vitals table
         latest_vitals = Vitals.objects.filter(patient_id=patient.id).order_by('-created_at').first()
+
+        # Get latest staff reassessment from reassessment_checklist table
+        from staff.models import StaffChecklist
+        latest_staff = StaffChecklist.objects.filter(patient_id=patient.id).order_by('-created_at').first()
 
         # Get latest ABG entry
         latest_abg = AbgEntry.objects.filter(patient_id=patient.id).order_by('-created_at').first()
 
-        # Dynamic status based on SpO2
-        spo2_val = latest_vitals.spo2 if latest_vitals and latest_vitals.spo2 is not None else None
-        rr_val = latest_vitals.respiratory_rate if latest_vitals and latest_vitals.respiratory_rate is not None else None
-        hr_val = latest_vitals.heart_rate if latest_vitals and latest_vitals.heart_rate is not None else None
+        # Determine which values are most recent: vitals table OR staff reassessment
+        spo2_val = None
+        rr_val = None
+        hr_val = None
 
+        vitals_time = latest_vitals.created_at if latest_vitals else None
+        staff_time = latest_staff.created_at if latest_staff else None
+
+        # Use staff values if they are more recent than vitals
+        if staff_time and (not vitals_time or staff_time > vitals_time):
+            # Staff reassessment is newer — use those values
+            spo2_val = latest_staff.spo2 if latest_staff.spo2 is not None else None
+            rr_val = latest_staff.respiratory_rate if latest_staff.respiratory_rate is not None else None
+            hr_val = latest_staff.heart_rate if latest_staff.heart_rate is not None else None
+        
+        # Fall back to vitals table values if staff didn't provide them
+        if spo2_val is None and latest_vitals and latest_vitals.spo2 is not None:
+            spo2_val = latest_vitals.spo2
+        if rr_val is None and latest_vitals and latest_vitals.respiratory_rate is not None:
+            rr_val = latest_vitals.respiratory_rate
+        if hr_val is None and latest_vitals and latest_vitals.heart_rate is not None:
+            hr_val = latest_vitals.heart_rate
+
+        # Dynamic status based on SpO2
         if spo2_val is not None:
             if spo2_val < 88:
                 display_status = 'CRITICAL'
@@ -224,6 +247,11 @@ class PatientDetailsForDoctorAPIView(APIView):
         except Exception:
             pass
 
+        # Convert numeric values to strings for consistent JSON type
+        spo2_str = str(int(spo2_val)) if spo2_val is not None else "--"
+        rr_str = str(int(rr_val)) if rr_val is not None else "--"
+        hr_str = str(int(hr_val)) if hr_val is not None else "--"
+
         return Response({
             "patient_id": patient.id,
             "name": patient.full_name,
@@ -232,10 +260,10 @@ class PatientDetailsForDoctorAPIView(APIView):
             "ward_no": patient.ward,
             "room_no": patient.bed_number,
             "diagnosis": "COPD Exacerbation",
-            "spo2": spo2_val if spo2_val is not None else "--",
+            "spo2": spo2_str,
             "target_spo2": "88-92",
-            "respiratory_rate": rr_val if rr_val is not None else "--",
-            "heart_rate": hr_val if hr_val is not None else "--",
+            "respiratory_rate": rr_str,
+            "heart_rate": hr_str,
             "abg_values": abg_values,
             "device": device if device else "--",
             "flow": flow if flow else "--",
@@ -572,8 +600,8 @@ class ClinicalTherapyPlanAPIView(APIView):
 class ClinicalReassessmentAPIView(APIView):
     """
     POST /api/patient/clinical-reassessment/<patient_id>/
-    Body: { reassessment_time_minutes: 30|60|120|240 }
-    Stores in schedule_reassessment table with due_time = NOW() + INTERVAL.
+    Body: { reassessment_time_minutes: 30|60|120|240, reassessment_type: "SpO2"|"ABG" }
+    Stores in schedule_reassessment table with scheduled_time = NOW() + INTERVAL.
     """
     def post(self, request, patient_id):
         try:
@@ -591,18 +619,24 @@ class ClinicalReassessmentAPIView(APIView):
         except (ValueError, TypeError):
             minutes = 60
 
-        due_time = timezone.now() + datetime.timedelta(minutes=minutes)
+        reassessment_type = request.data.get('reassessment_type', 'SpO2')
+        scheduled_time = timezone.now() + datetime.timedelta(minutes=minutes)
 
         ScheduleReassessment.objects.create(
             patient_id=patient.id,
+            patient_name=patient.full_name,
+            bed_no=patient.bed_number or '',
+            ward_no=patient.ward or '',
+            reassessment_type=reassessment_type,
             reassessment_minutes=minutes,
-            due_time=due_time,
-            status='pending'
+            scheduled_time=scheduled_time,
+            status='pending',
+            scheduled_by='doctor',
         )
 
         return Response({
             "message": "Reassessment scheduled successfully.",
-            "due_time": due_time.isoformat(),
+            "scheduled_time": scheduled_time.isoformat(),
             "reassessment_time_minutes": minutes
         }, status=status.HTTP_201_CREATED)
 
@@ -788,6 +822,14 @@ class AddVitalsAPIView(APIView):
             blood_pressure=blood_pressure
         )
 
+        # Check for SpO2 drop and create doctor alert if needed
+        if spo2 is not None:
+            try:
+                from alerts.views import check_spo2_drop_and_alert
+                check_spo2_drop_and_alert(patient_id, spo2)
+            except Exception as e:
+                print(f"[AddVitals] Alert check error: {e}")
+
         return Response({"message": "Vitals saved successfully"}, status=status.HTTP_201_CREATED)
 
 
@@ -830,40 +872,29 @@ class AddAbgEntryAPIView(APIView):
 class ReassessmentChecklistAPIView(APIView):
     """
     GET  /api/patients/<patient_id>/reassessment-checklist/
-    POST /api/patients/<patient_id>/reassessment-checklist/
-    Body: { spo2_checked, resp_rate_checked, consciousness_checked, device_fit_checked, abg_checked }
+    Returns all staff-entered reassessment checklists for the patient.
+    Now reads from staff.models.StaffChecklist (reassessment_checklist table).
     """
     def get(self, request, patient_id):
         try:
             patient = Patient.objects.get(id=patient_id)
         except Patient.DoesNotExist:
             return Response({"error": "Patient not found."}, status=status.HTTP_404_NOT_FOUND)
-        records = ReassessmentChecklist.objects.filter(patient=patient).order_by('-created_at').values()
-        return Response({"patient_id": patient_id, "reassessments": list(records)}, status=status.HTTP_200_OK)
 
-    def post(self, request, patient_id):
-        try:
-            patient = Patient.objects.get(id=patient_id)
-        except Patient.DoesNotExist:
-            return Response({"error": "Patient not found."}, status=status.HTTP_404_NOT_FOUND)
-        spo2 = request.data.get('spo2_checked', False)
-        resp = request.data.get('resp_rate_checked', False)
-        cons = request.data.get('consciousness_checked', False)
-        dev = request.data.get('device_fit_checked', False)
-        abg = request.data.get('abg_checked', False)
-        all_clear = all([spo2, resp, cons, dev, abg])
-        record = ReassessmentChecklist.objects.create(
-            patient=patient,
-            spo2_checked=spo2,
-            resp_rate_checked=resp,
-            consciousness_checked=cons,
-            device_fit_checked=dev,
-            abg_checked=abg,
-            all_clear=all_clear,
-        )
-        return Response({
-            "message": "Reassessment checklist completed." if all_clear else "Reassessment checklist saved (incomplete).",
-            "patient_id": patient_id,
-            "all_clear": record.all_clear,
-            "recorded_at": record.created_at,
-        }, status=status.HTTP_201_CREATED)
+        from staff.models import StaffChecklist
+        records = StaffChecklist.objects.filter(patient_id=patient_id).order_by('-created_at')
+        data = []
+        for r in records:
+            data.append({
+                "id": r.id,
+                "patient_id": r.patient_id,
+                "reassessment_id": r.reassessment_id,
+                "spo2": r.spo2,
+                "respiratory_rate": r.respiratory_rate,
+                "heart_rate": r.heart_rate,
+                "abg_values": r.abg_values,
+                "remarks": r.remarks,
+                "entered_by": r.entered_by,
+                "created_at": r.created_at.strftime("%Y-%m-%d %H:%M:%S") if r.created_at else None,
+            })
+        return Response({"patient_id": patient_id, "reassessments": data}, status=status.HTTP_200_OK)

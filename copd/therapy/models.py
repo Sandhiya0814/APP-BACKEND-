@@ -139,13 +139,19 @@ class EscalationCriteria(models.Model):
 
 class ScheduleReassessment(models.Model):
     patient_id = models.IntegerField()
+    patient_name = models.CharField(max_length=100, default='')
+    bed_no = models.CharField(max_length=20, default='')
+    ward_no = models.CharField(max_length=20, default='')
+    reassessment_type = models.CharField(max_length=50, default='SpO2')
     reassessment_minutes = models.IntegerField(default=60)
-    due_time = models.DateTimeField(null=True, blank=True)
+    scheduled_time = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=20, default='pending')
+    scheduled_by = models.CharField(max_length=20, default='staff')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        db_table = 'schedule_reassessment'
+        db_table = 'reassessment_shedule'
+
 
 
 class UrgentAction(models.Model):

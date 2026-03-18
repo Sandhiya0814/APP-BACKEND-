@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import (
     Patient, BaselineDetails, GoldClassification, SpirometryData,
-    GasExchangeHistory, CurrentSymptoms, Vitals, AbgEntry, ReassessmentChecklist
+    GasExchangeHistory, CurrentSymptoms, Vitals, AbgEntry
 )
 
 
@@ -113,16 +113,9 @@ class ABGEntryInputSerializer(serializers.Serializer):
     fio2 = serializers.FloatField(error_messages={"required": "FiO2 is required."})
 
 
-class ReassessmentChecklistSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ReassessmentChecklist
-        fields = '__all__'
-
-
 class ReassessmentChecklistInputSerializer(serializers.Serializer):
     patient_id = serializers.IntegerField(error_messages={"required": "patient_id is required."})
-    spo2_checked = serializers.BooleanField(default=False)
-    resp_rate_checked = serializers.BooleanField(default=False)
-    consciousness_checked = serializers.BooleanField(default=False)
-    device_fit_checked = serializers.BooleanField(default=False)
-    abg_checked = serializers.BooleanField(default=False)
+    spo2 = serializers.FloatField(required=False)
+    respiratory_rate = serializers.FloatField(required=False)
+    heart_rate = serializers.FloatField(required=False, allow_null=True)
+    remarks = serializers.CharField(required=False, allow_blank=True)

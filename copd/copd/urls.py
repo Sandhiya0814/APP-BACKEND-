@@ -13,7 +13,8 @@ from staff.views import (
     StaffForgotPasswordAPIView, StaffVerifyOTPAPIView,
     StaffResetPasswordAPIView, StaffDashboardAPIView, StaffProfileAPIView,
     StaffPatientsAPIView, StaffUpdateVitalsAPIView, StaffUpdateAbgAPIView,
-    ReassessmentAPIView
+    ReassessmentAPIView, ScheduleReassessmentAPIView,
+    StaffChecklistAPIView, StaffReassessmentValuesAPIView
 )
 
 # Admin Panel
@@ -47,7 +48,9 @@ from therapy.views import (
     DeviceSelectionAPIView, CustomDeviceSelectionAPIView, AIDeviceRecommendationAPIView,
     ReviewRecommendationAPIView,
     TherapyRecommendationAPIView, NIVRecommendationAPIView,
-    EscalationCriteriaAPIView, ScheduleReassessmentAPIView, UrgentActionAPIView
+    EscalationCriteriaAPIView,
+    ScheduleReassessmentAPIView as TherapyScheduleReassessmentAPIView,
+    UrgentActionAPIView
 )
 
 # Alerts
@@ -97,6 +100,9 @@ urlpatterns = [
     path('api/staff/update-vitals/<int:patient_id>/', StaffUpdateVitalsAPIView.as_view(), name='staff-update-vitals'),
     path('api/staff/update-abg/<int:patient_id>/', StaffUpdateAbgAPIView.as_view(), name='staff-update-abg'),
     path('api/reassessment/', ReassessmentAPIView.as_view(), name='reassessment'),
+    path('api/schedule-reassessment/', ScheduleReassessmentAPIView.as_view(), name='schedule-reassessment'),
+    path('api/staff-checklist/', StaffChecklistAPIView.as_view(), name='staff-checklist'),
+    path('api/patient/staff-reassessments/<int:patient_id>/', StaffReassessmentValuesAPIView.as_view(), name='staff-reassessment-values'),
 
     # ──────────────────────────────────────────────────
     # Admin Panel
@@ -172,7 +178,7 @@ urlpatterns = [
     path('api/patients/<int:patient_id>/therapy-recommendation/', TherapyRecommendationAPIView.as_view(), name='patient-therapy'),
     path('api/patients/<int:patient_id>/niv-recommendation/', NIVRecommendationAPIView.as_view(), name='patient-niv'),
     path('api/patients/<int:patient_id>/escalation-criteria/', EscalationCriteriaAPIView.as_view(), name='patient-escalation'),
-    path('api/patients/<int:patient_id>/schedule-reassessment/', ScheduleReassessmentAPIView.as_view(), name='patient-schedule-reassessment'),
+    path('api/patients/<int:patient_id>/schedule-reassessment/', TherapyScheduleReassessmentAPIView.as_view(), name='patient-schedule-reassessment'),
     path('api/patients/<int:patient_id>/urgent-action/', UrgentActionAPIView.as_view(), name='patient-urgent-action'),
 
     # ──────────────────────────────────────────────────
