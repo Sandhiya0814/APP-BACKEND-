@@ -275,7 +275,7 @@ class DoctorDashboardAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Build patient data with latest vitals
+        # Build patient data with latest vitals + staff reassessment
         patients = Patient.objects.all().exclude(full_name='Jane Doe')
         total_patients = patients.count()
 
@@ -283,18 +283,40 @@ class DoctorDashboardAPIView(APIView):
         warning_count = 0
         needs_attention = []
 
+        # Import StaffChecklist for staff reassessment values
+        try:
+            from staff.models import StaffChecklist
+            has_staff_model = True
+        except ImportError:
+            has_staff_model = False
+
         for p in patients:
             latest_vital = Vitals.objects.filter(patient_id=p.id).order_by('-created_at').first()
-            spo2_val = latest_vital.spo2 if latest_vital and latest_vital.spo2 is not None else None
+
+            # Also check staff reassessment values
+            spo2_val = None
+            if has_staff_model:
+                latest_staff = StaffChecklist.objects.filter(patient_id=p.id).order_by('-created_at').first()
+                vitals_time = latest_vital.created_at if latest_vital else None
+                staff_time = latest_staff.created_at if latest_staff else None
+
+                # Use staff values if they are more recent than vitals
+                if staff_time and (not vitals_time or staff_time > vitals_time):
+                    if latest_staff.spo2 is not None:
+                        spo2_val = latest_staff.spo2
+
+            # Fall back to vitals table
+            if spo2_val is None and latest_vital and latest_vital.spo2 is not None:
+                spo2_val = latest_vital.spo2
 
             if spo2_val is not None:
-                if spo2_val < 90:
+                if spo2_val < 88:
                     critical_count += 1
-                elif spo2_val <= 94:
+                elif spo2_val <= 92:
                     warning_count += 1
 
-                # Needs attention: spo2 < 95
-                if spo2_val < 95:
+                # Needs attention: spo2 <= 92 (critical + warning)
+                if spo2_val <= 92:
                     needs_attention.append({
                         "id": p.id,
                         "name": p.full_name,
