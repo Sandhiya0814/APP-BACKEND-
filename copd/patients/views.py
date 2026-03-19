@@ -99,8 +99,10 @@ class PatientListAPIView(APIView):
 
 class PatientDetailAPIView(APIView):
     """
-    GET /api/patients/<patient_id>/
+    GET    /api/patients/<patient_id>/
+    DELETE /api/patients/<patient_id>/
     Returns full patient details with the most recent vitals, ABG, and symptoms.
+    DELETE removes the patient and all related data from the database.
     """
     def get(self, request, patient_id):
         try:
@@ -161,6 +163,60 @@ class PatientDetailAPIView(APIView):
             "latest_abg": abg_data,
             "latest_symptoms": symptoms_data,
             "created_at": patient.created_at,
+        }, status=status.HTTP_200_OK)
+
+    def delete(self, request, patient_id):
+        try:
+            patient = Patient.objects.get(id=patient_id)
+        except Patient.DoesNotExist:
+            return Response({"error": "Patient not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Delete all related data
+        Vitals.objects.filter(patient_id=patient_id).delete()
+        AbgEntry.objects.filter(patient_id=patient_id).delete()
+        CurrentSymptoms.objects.filter(patient_id=patient_id).delete()
+        BaselineDetails.objects.filter(patient_id=patient_id).delete()
+        GoldClassification.objects.filter(patient_id=patient_id).delete()
+        SpirometryData.objects.filter(patient_id=patient_id).delete()
+        GasExchangeHistory.objects.filter(patient_id=patient_id).delete()
+
+        # Delete therapy-related data
+        try:
+            from therapy.models import (
+                OxygenStatus, AIAnalysis, ABGTrend, TrendAnalysis,
+                HypoxemiaCause, OxygenRequirement, DeviceSelection,
+                ReviewRecommendation, TherapyRecommendation,
+                NIVRecommendation, EscalationCriteria,
+                ScheduleReassessment, UrgentAction
+            )
+            OxygenStatus.objects.filter(patient_id=patient_id).delete()
+            AIAnalysis.objects.filter(patient_id=patient_id).delete()
+            ABGTrend.objects.filter(patient_id=patient_id).delete()
+            TrendAnalysis.objects.filter(patient_id=patient_id).delete()
+            HypoxemiaCause.objects.filter(patient_id=patient_id).delete()
+            OxygenRequirement.objects.filter(patient_id=patient_id).delete()
+            DeviceSelection.objects.filter(patient_id=patient_id).delete()
+            ReviewRecommendation.objects.filter(patient_id=patient_id).delete()
+            TherapyRecommendation.objects.filter(patient_id=patient_id).delete()
+            NIVRecommendation.objects.filter(patient_id=patient_id).delete()
+            EscalationCriteria.objects.filter(patient_id=patient_id).delete()
+            ScheduleReassessment.objects.filter(patient_id=patient_id).delete()
+            UrgentAction.objects.filter(patient_id=patient_id).delete()
+        except Exception:
+            pass  # If therapy tables don't exist yet, that's okay
+
+        # Delete staff checklists
+        try:
+            from staff.models import StaffChecklist
+            StaffChecklist.objects.filter(patient_id=patient_id).delete()
+        except Exception:
+            pass
+
+        patient_name = patient.full_name
+        patient.delete()
+
+        return Response({
+            "message": f"Patient '{patient_name}' and all related data removed successfully."
         }, status=status.HTTP_200_OK)
 
 

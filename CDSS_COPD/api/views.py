@@ -662,7 +662,7 @@ class StaffDirectLoginAPIView(APIView):
         except Exception as e:
             return Response({"error": f"OTP generated but email could not be sent: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        return Response({"message": "Login successful. OTP sent to email", "staff_email": staff_email}, status=status.HTTP_200_OK)
+        return Response({"message": "Login successful. OTP sent to email", "staff_email": staff_email, "name": name}, status=status.HTTP_200_OK)
 
 
 class DoctorDirectLoginAPIView(APIView):
@@ -723,7 +723,7 @@ class DoctorDirectLoginAPIView(APIView):
         except Exception as e:
             return Response({"error": f"OTP generated but email could not be sent: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        return Response({"message": "OTP sent to registered email", "doctor_email": doctor_email}, status=status.HTTP_200_OK)
+        return Response({"message": "OTP sent to registered email", "doctor_email": doctor_email, "name": name}, status=status.HTTP_200_OK)
 
 
 # ─── Forgot Password & Reset Password (Doctor + Staff) ──────────────────────
@@ -873,3 +873,39 @@ class ResetPasswordAPIView(APIView):
         reset_token.save()
 
         return Response({"message": "Password reset successfully"}, status=status.HTTP_200_OK)
+
+
+class UpdateProfileAPIView(APIView):
+    """
+    POST /api/update-profile/
+    Body: { "email": "...", "role": "...", "name": "...", "new_email": "..." }
+    Updates name (and optionally email) for doctor or staff.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email")
+        role = request.data.get("role")
+        name = request.data.get("name")
+        new_email = request.data.get("new_email", email)
+
+        if not email or not role or not name:
+            return Response({"error": "email, role, and name are required"}, status=400)
+
+        if role == "doctor":
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE doctor SET name = %s, email = %s WHERE email = %s",
+                    [name, new_email, email]
+                )
+        elif role == "staff":
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE staff SET name = %s, email = %s WHERE email = %s",
+                    [name, new_email, email]
+                )
+        else:
+            return Response({"error": "Invalid role"}, status=400)
+
+        return Response({"message": "Profile updated successfully"}, status=200)
+

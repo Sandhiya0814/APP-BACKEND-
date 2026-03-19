@@ -69,9 +69,9 @@ class AIAnalysisAPIView(APIView):
         patient, err = get_patient_or_404(patient_id)
         if err:
             return err
-        from patients.models import Vitals, ABGEntry
+        from patients.models import Vitals, AbgEntry
         latest_vitals = Vitals.objects.filter(patient_id=patient_id).order_by('-created_at').first()
-        latest_abg = ABGEntry.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+        latest_abg = AbgEntry.objects.filter(patient_id=patient_id).order_by('-created_at').first()
 
         # Auto-compute risk based on clinical thresholds
         risk_score = 50.0
@@ -88,11 +88,11 @@ class AIAnalysisAPIView(APIView):
                 risk_score = min(risk_score + 15, 100)
                 key_factors.append("SpO2 below target range (88–92%)")
                 recommendations.append("Increase oxygen flow rate.")
-            if latest_vitals.resp_rate > 30:
+            if latest_vitals.respiratory_rate > 30:
                 risk_score = min(risk_score + 20, 100)
                 key_factors.append("Tachypnoea: RR > 30 breaths/min")
                 recommendations.append("Consider NIV support.")
-            elif latest_vitals.resp_rate > 25:
+            elif latest_vitals.respiratory_rate > 25:
                 risk_score = min(risk_score + 10, 100)
                 key_factors.append("Elevated respiratory rate (25–30 breaths/min)")
 
@@ -153,20 +153,96 @@ class AIAnalysisAPIView(APIView):
 class ABGTrendsAPIView(APIView):
     """
     GET /api/patients/<patient_id>/abg-trends/
-    Returns all ABG entries in chronological order for trend display.
+    Returns all ABG entries in chronological order for trend display,
+    plus patient info, time labels, and trend analysis summary.
     """
     def get(self, request, patient_id):
         patient, err = get_patient_or_404(patient_id)
         if err:
             return err
-        from patients.models import ABGEntry
-        entries = ABGEntry.objects.filter(patient_id=patient_id).order_by('created_at').values(
+        from patients.models import AbgEntry, Vitals
+        entries = list(AbgEntry.objects.filter(patient_id=patient_id).order_by('created_at').values(
             'id', 'ph', 'pao2', 'paco2', 'hco3', 'fio2', 'created_at'
-        )
+        ))
+
+        # Format timestamps and add time labels for chart display
+        for e in entries:
+            if e.get('created_at'):
+                e['time_label'] = e['created_at'].strftime("%H:%M")
+                e['created_at'] = e['created_at'].strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                e['time_label'] = ''
+
+        # Determine patient status from latest SpO2
+        status_label = "Stable"
+        latest_vitals = Vitals.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+        spo2_val = None
+        if latest_vitals and latest_vitals.spo2 is not None:
+            spo2_val = latest_vitals.spo2
+            if spo2_val < 88:
+                status_label = "Critical"
+            elif spo2_val < 92:
+                status_label = "Warning"
+
+        # Generate trend analysis text from latest ABG values
+        trend_text = "No ABG data available for trend analysis."
+        if entries:
+            latest = entries[-1]
+            ph = latest.get('ph', 0)
+            paco2 = latest.get('paco2', 0)
+            pao2 = latest.get('pao2', 0)
+            fio2 = latest.get('fio2', 0)
+
+            issues = []
+            if ph < 7.35:
+                issues.append("acidosis (pH {:.2f})".format(ph))
+            elif ph > 7.45:
+                issues.append("alkalosis (pH {:.2f})".format(ph))
+
+            if paco2 > 45:
+                issues.append("elevated PaCO2 ({:.0f} mmHg) indicating CO2 retention".format(paco2))
+            elif paco2 < 35:
+                issues.append("low PaCO2 ({:.0f} mmHg) suggesting hyperventilation".format(paco2))
+
+            if pao2 < 60:
+                issues.append("hypoxemia (PaO2 {:.0f} mmHg)".format(pao2))
+
+            if issues:
+                trend_text = "Patient is showing " + ", ".join(issues) + "."
+                if paco2 > 45 and ph < 7.35:
+                    trend_text += " This suggests Type II respiratory failure progression."
+                elif pao2 < 60 and ph < 7.35:
+                    trend_text += " Consider escalating oxygen therapy."
+            else:
+                trend_text = "ABG values are within normal ranges. Continue current management."
+
+            # Add trend direction info if multiple entries
+            if len(entries) >= 2:
+                prev = entries[-2]
+                directions = []
+                if ph < prev.get('ph', ph):
+                    directions.append("pH declining")
+                elif ph > prev.get('ph', ph):
+                    directions.append("pH improving")
+
+                curr_paco2 = latest.get('paco2', 0)
+                prev_paco2 = prev.get('paco2', curr_paco2)
+                if curr_paco2 > prev_paco2:
+                    directions.append("PaCO2 rising")
+                elif curr_paco2 < prev_paco2:
+                    directions.append("PaCO2 decreasing")
+
+                if directions:
+                    trend_text += " Trend: " + ", ".join(directions) + "."
+
         return Response({
             "patient_id": patient_id,
-            "abg_trend_data": list(entries),
-            "total_entries": len(list(entries)),
+            "patient_name": patient.full_name,
+            "diagnosis": "COPD Exacerbation",
+            "status": status_label,
+            "abg_trend_data": entries,
+            "total_entries": len(entries),
+            "trend_analysis": trend_text,
         }, status=status.HTTP_200_OK)
 
 
@@ -465,13 +541,63 @@ class NIVRecommendationAPIView(APIView):
                 "indication": latest.indication,
                 "recorded_at": latest.created_at,
             }, status=status.HTTP_200_OK)
-        # Default NIV protocol for COPD
+
+        # --- Dynamically calculate IPAP / EPAP from patient data ---
+        from patients.models import Vitals, AbgEntry
+        latest_vitals = Vitals.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+        latest_abg   = AbgEntry.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+
+        # Base pressures
+        ipap = 10.0
+        epap = 4.0
+        mode = "BiPAP"
+        indication_parts = []
+
+        if latest_abg:
+            # Adjust IPAP based on PaCO2 severity
+            if latest_abg.paco2 > 60:
+                ipap = 20.0
+                indication_parts.append("Severe hypercapnia (PaCO2 > 60 mmHg)")
+            elif latest_abg.paco2 > 50:
+                ipap = 16.0
+                indication_parts.append("Moderate hypercapnia (PaCO2 > 50 mmHg)")
+            elif latest_abg.paco2 > 45:
+                ipap = 14.0
+                indication_parts.append("Mild hypercapnia (PaCO2 > 45 mmHg)")
+
+            # Further bump if acute acidosis
+            if latest_abg.ph < 7.25:
+                ipap = min(ipap + 4, 24.0)
+                indication_parts.append("Severe acidosis (pH < 7.25)")
+            elif latest_abg.ph < 7.35:
+                ipap = min(ipap + 2, 24.0)
+                indication_parts.append("Respiratory acidosis (pH < 7.35)")
+
+        if latest_vitals:
+            # Adjust EPAP based on oxygenation
+            if latest_vitals.spo2 < 85:
+                epap = 8.0
+                indication_parts.append("Severe hypoxaemia (SpO2 < 85%)")
+            elif latest_vitals.spo2 < 88:
+                epap = 6.0
+                indication_parts.append("Hypoxaemia (SpO2 < 88%)")
+            elif latest_vitals.spo2 < 92:
+                epap = 5.0
+                indication_parts.append("Borderline oxygenation (SpO2 < 92%)")
+
+        if indication_parts:
+            indication = "Acute hypercapnic respiratory failure with " + ", ".join(indication_parts) + "."
+        else:
+            indication = "Prophylactic NIV — no acute triggers detected."
+            ipap = 10.0
+            epap = 4.0
+
         return Response({
             "patient_id": patient_id,
-            "mode": "BiPAP",
-            "ipap": 14.0,
-            "epap": 4.0,
-            "indication": "Acute hypercapnic respiratory failure with pH < 7.35 and PaCO2 > 45 mmHg.",
+            "mode": mode,
+            "ipap": ipap,
+            "epap": epap,
+            "indication": indication,
         }, status=status.HTTP_200_OK)
 
     def post(self, request, patient_id):
@@ -502,9 +628,9 @@ class EscalationCriteriaAPIView(APIView):
         patient, err = get_patient_or_404(patient_id)
         if err:
             return err
-        from patients.models import Vitals, ABGEntry
+        from patients.models import Vitals, AbgEntry
         latest_vitals = Vitals.objects.filter(patient_id=patient_id).order_by('-created_at').first()
-        latest_abg = ABGEntry.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+        latest_abg = AbgEntry.objects.filter(patient_id=patient_id).order_by('-created_at').first()
         escalation_triggers = []
         criteria_met = False
 
@@ -512,7 +638,7 @@ class EscalationCriteriaAPIView(APIView):
             if latest_vitals.spo2 < 85:
                 escalation_triggers.append("SpO2 < 85% — Critical hypoxaemia")
                 criteria_met = True
-            if latest_vitals.resp_rate > 35:
+            if latest_vitals.respiratory_rate > 35:
                 escalation_triggers.append("Respiratory rate > 35 breaths/min")
                 criteria_met = True
 
@@ -524,9 +650,12 @@ class EscalationCriteriaAPIView(APIView):
                 escalation_triggers.append("PaCO2 > 70 mmHg — Severe hypercapnia")
                 criteria_met = True
 
-        EscalationCriteria.objects.create(
-            patient_id=patient_id, criteria_met=criteria_met, details=str(escalation_triggers)
-        )
+        try:
+            EscalationCriteria.objects.create(
+                patient_id=patient_id, criteria_met=criteria_met, details=str(escalation_triggers)
+            )
+        except Exception:
+            pass  # Don't let DB save failure break the API response
 
         return Response({
             "patient_id": patient_id,
@@ -608,8 +737,31 @@ class UrgentActionAPIView(APIView):
         patient, err = get_patient_or_404(patient_id)
         if err:
             return err
-        records = UrgentAction.objects.filter(patient_id=patient_id).order_by('-created_at').values()
-        return Response({"patient_id": patient_id, "urgent_actions": list(records)}, status=status.HTTP_200_OK)
+        from patients.models import Vitals, AbgEntry
+        latest_vitals = Vitals.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+        latest_abg = AbgEntry.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+        
+        icu_triggers = []
+        icu_required = False
+
+        if latest_abg and latest_abg.ph < 7.25:
+            icu_triggers.append("pH < 7.25 despite NIV")
+            icu_required = True
+        
+        if latest_vitals:
+            # Use severe distress markers
+            if latest_vitals.respiratory_rate > 40:
+                icu_triggers.append("Respiratory rate > 40 (Severe distress)")
+                icu_required = True
+            if latest_vitals.spo2 < 80:
+                icu_triggers.append("SpO2 < 80% on high flow")
+                icu_required = True
+
+        return Response({
+            "patient_id": patient_id, 
+            "icu_required": icu_required,
+            "triggers": icu_triggers
+        }, status=status.HTTP_200_OK)
 
     def post(self, request, patient_id):
         patient, err = get_patient_or_404(patient_id)

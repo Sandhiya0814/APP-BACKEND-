@@ -532,21 +532,42 @@ class StaffUpdateVitalsAPIView(APIView):
 class StaffUpdateAbgAPIView(APIView):
     """
     PUT /api/staff/update-abg/<patient_id>/
+    Creates a NEW AbgEntry record for each reassessment so that
+    the ABG Trends graph can show how values evolve over time.
     """
     def put(self, request, patient_id):
         from patients.models import AbgEntry
-        abg = AbgEntry.objects.filter(patient_id=patient_id).order_by('-created_at').first()
-        if not abg:
-            return Response({"error": "No existing ABG entry found to update"}, status=status.HTTP_404_NOT_FOUND)
-            
-        abg.ph = request.data.get('ph', abg.ph)
-        abg.pao2 = request.data.get('pao2', abg.pao2)
-        abg.paco2 = request.data.get('paco2', abg.paco2)
-        abg.hco3 = request.data.get('hco3', abg.hco3)
-        abg.fio2 = request.data.get('fio2', abg.fio2)
-        abg.save()
-        
-        return Response({"message": "ABG updated successfully"}, status=status.HTTP_200_OK)
+
+        ph = request.data.get('ph')
+        pao2 = request.data.get('pao2')
+        paco2 = request.data.get('paco2')
+        hco3 = request.data.get('hco3')
+        fio2 = request.data.get('fio2')
+
+        # Validate that at least the core fields are present
+        if ph is None or paco2 is None:
+            return Response(
+                {"error": "ph and paco2 are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Fall back to the previous entry's values for any missing fields
+        prev = AbgEntry.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+        if prev:
+            pao2 = pao2 if pao2 is not None else prev.pao2
+            hco3 = hco3 if hco3 is not None else prev.hco3
+            fio2 = fio2 if fio2 is not None else prev.fio2
+
+        AbgEntry.objects.create(
+            patient_id=patient_id,
+            ph=float(ph),
+            pao2=float(pao2) if pao2 is not None else 0,
+            paco2=float(paco2),
+            hco3=float(hco3) if hco3 is not None else 0,
+            fio2=float(fio2) if fio2 is not None else 21,
+        )
+
+        return Response({"message": "ABG entry recorded for trend tracking"}, status=status.HTTP_201_CREATED)
 
 
 class ReassessmentAPIView(APIView):

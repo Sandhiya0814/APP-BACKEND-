@@ -2,8 +2,7 @@ from django.contrib import admin
 from django.urls import path
 
 # Splash
-from copd.views import SplashAPIView, RegisterAPIView, UnifiedLoginAPIView, AcceptTermsAPIView, ForgotPasswordAPIView, ForgotPasswordVerifyOTPAPIView, ResetPasswordAPIView
-
+from copd.views import SplashAPIView, RegisterAPIView, UnifiedLoginAPIView, AcceptTermsAPIView, ForgotPasswordAPIView, ForgotPasswordVerifyOTPAPIView, ResetPasswordAPIView, UpdateProfileAPIView
 # Doctor
 from doctor.views import *
 
@@ -72,6 +71,7 @@ urlpatterns = [
     path('api/forgot-password/', ForgotPasswordAPIView.as_view(), name='forgot-password'),
     path('api/forgot-password/verify-otp/', ForgotPasswordVerifyOTPAPIView.as_view(), name='forgot-password-verify-otp'),
     path('api/reset-password/', ResetPasswordAPIView.as_view(), name='reset-password'),
+    path('api/update-profile/', UpdateProfileAPIView.as_view(), name='update-profile'),
 
     # ──────────────────────────────────────────────────
     # Doctor Auth

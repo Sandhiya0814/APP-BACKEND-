@@ -414,3 +414,41 @@ class ResetPasswordAPIView(APIView):
             "status": "success",
             "message": "Password reset successful",
         }, status=status.HTTP_200_OK)
+
+
+class UpdateProfileAPIView(APIView):
+    """
+    POST /api/update-profile/
+    Body: { "email": "...", "role": "...", "name": "...", "new_email": "..." }
+    """
+    def post(self, request):
+        email = request.data.get("email")
+        role = request.data.get("role")
+        name = request.data.get("name")
+        new_email = request.data.get("new_email", email)
+
+        if not email or not role or not name:
+            return Response({"error": "email, role, and name are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if role == "doctor":
+            from doctor.models import Doctor
+            try:
+                user = Doctor.objects.get(email=email)
+                user.name = name
+                user.email = new_email
+                user.save(update_fields=['name', 'email'])
+                return Response({"message": "Profile updated successfully"}, status=status.HTTP_200_OK)
+            except Doctor.DoesNotExist:
+                return Response({"error": "Doctor not found"}, status=status.HTTP_404_NOT_FOUND)
+        elif role == "staff":
+            from staff.models import Staff
+            try:
+                user = Staff.objects.get(email=email)
+                user.name = name
+                user.email = new_email
+                user.save(update_fields=['name', 'email'])
+                return Response({"message": "Profile updated successfully"}, status=status.HTTP_200_OK)
+            except Staff.DoesNotExist:
+                return Response({"error": "Staff not found"}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            return Response({"error": "Invalid role"}, status=status.HTTP_400_BAD_REQUEST)

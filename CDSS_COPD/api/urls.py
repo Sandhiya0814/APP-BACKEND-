@@ -63,4 +63,6 @@ urlpatterns = [
     path('forgot-password/', ForgotPasswordAPIView.as_view(), name='forgot_password'),
     path('reset-password/<str:token>/', ResetPasswordAPIView.as_view(), name='reset_password'),
 
+    # Universal Profile Update
+    path('update-profile/', UpdateProfileAPIView.as_view(), name='update_profile'),
 ]
